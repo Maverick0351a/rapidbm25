@@ -43,7 +43,7 @@ class BM25Retriever(BaseRetriever):
 
     def _retrieve(self, query_bundle: QueryBundle) -> list[NodeWithScore]:
         query = query_bundle.query_str
-        hits = self._live.search(query, k=self._k)
+        hits = self._live.search_terms(query, k=self._k)
         nodes = []
         for hit in hits:
             node = TextNode(id_=hit["id"], text=hit["text"], metadata=dict(hit["metadata"]))

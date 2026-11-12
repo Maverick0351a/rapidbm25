@@ -149,10 +149,13 @@ fn need<'a>(file: &'a [u8], off: u64, nbytes: u64) -> PyResult<&'a [u8]> {
 
 fn read_u64s(file: &[u8], off: u64, n: u64) -> PyResult<Vec<u64>> {
     let nusz = usize::try_from(n).map_err(|_| PyValueError::new_err("length overflow"))?;
-    let bytes = need(file, off, n.saturating_mul(8))?;
+    let nbytes = n
+        .checked_mul(8)
+        .ok_or_else(|| PyValueError::new_err("section too large"))?;
     if n != 0 && (off % 8) != 0 {
-        return Err(PyValueError::new_err("section is not 8-byte aligned"));
+        return Err(PyValueError::new_err("u64/f64 section is not 8-byte aligned"));
     }
+    let bytes = need(file, off, nbytes)?;
     let mut out = Vec::with_capacity(nusz);
     for i in 0..nusz {
         let s = i * 8;
@@ -163,7 +166,13 @@ fn read_u64s(file: &[u8], off: u64, n: u64) -> PyResult<Vec<u64>> {
 
 fn read_u32s(file: &[u8], off: u64, n: u64) -> PyResult<Vec<u32>> {
     let nusz = usize::try_from(n).map_err(|_| PyValueError::new_err("length overflow"))?;
-    let bytes = need(file, off, n.saturating_mul(4))?;
+    let nbytes = n
+        .checked_mul(4)
+        .ok_or_else(|| PyValueError::new_err("section too large"))?;
+    if n != 0 && (off % 4) != 0 {
+        return Err(PyValueError::new_err("u32 section is not 4-byte aligned"));
+    }
+    let bytes = need(file, off, nbytes)?;
     let mut out = Vec::with_capacity(nusz);
     for i in 0..nusz {
         let s = i * 4;
@@ -176,8 +185,77 @@ fn read_f64s(file: &[u8], off: u64, n: u64) -> PyResult<Vec<f64>> {
     Ok(read_u64s(file, off, n)?.into_iter().map(f64::from_bits).collect())
 }
 
+fn validate_monotonic(name: &str, offsets: &[u64], expected_last: u64) -> PyResult<()> {
+    let mut prev = 0u64;
+    for (i, &off) in offsets.iter().enumerate() {
+        if i == 0 && off != 0 {
+            return Err(PyValueError::new_err(format!("{name} must start at 0")));
+        }
+        if off < prev {
+            return Err(PyValueError::new_err(format!("{name} is not monotonic")));
+        }
+        prev = off;
+    }
+    if prev != expected_last {
+        return Err(PyValueError::new_err(format!(
+            "{name} does not cover the section ({prev} != {expected_last})"
+        )));
+    }
+    Ok(())
+}
+
+/// Reject corrupt posting tables before any score loop can index them.
+fn validate_static_columns(
+    n_docs: usize,
+    n_terms: usize,
+    offsets: &[u64],
+    post_doc: &[u32],
+    doc_terms_off: &[u64],
+    doc_terms_tid: &[u32],
+    doc_terms_tf: &[u32],
+) -> PyResult<()> {
+    if offsets.len() != n_terms + 1 {
+        return Err(PyValueError::new_err("offsets length must be n_terms + 1"));
+    }
+    if doc_terms_off.len() != n_docs + 1 {
+        return Err(PyValueError::new_err("doc_terms_off length must be n_docs + 1"));
+    }
+    if doc_terms_tid.len() != doc_terms_tf.len() {
+        return Err(PyValueError::new_err("doc term columns disagree"));
+    }
+    validate_monotonic("offsets", offsets, post_doc.len() as u64)?;
+    validate_monotonic("doc_terms_off", doc_terms_off, doc_terms_tid.len() as u64)?;
+    let mut prev_off = 0u64;
+    for &off in offsets {
+        let start = prev_off as usize;
+        let end = off as usize;
+        let mut last: Option<u32> = None;
+        for &doc in &post_doc[start..end] {
+            if doc as usize >= n_docs {
+                return Err(PyValueError::new_err("posting doc id is out of range"));
+            }
+            if let Some(prev) = last {
+                if doc <= prev {
+                    return Err(PyValueError::new_err("postings are not strictly increasing"));
+                }
+            }
+            last = Some(doc);
+        }
+        prev_off = off;
+    }
+    for &tid in doc_terms_tid {
+        if n_terms == 0 || tid as usize >= n_terms {
+            return Err(PyValueError::new_err("doc term id is out of range"));
+        }
+    }
+    Ok(())
+}
+
 fn read_strings(bytes: &[u8], count: usize) -> PyResult<Vec<String>> {
-    let mut out = Vec::with_capacity(count);
+    if count > bytes.len() {
+        return Err(PyValueError::new_err("string table count exceeds the section"));
+    }
+    let mut out = Vec::new();
     let mut i = 0;
     while out.len() < count {
         if i + 4 > bytes.len() {
@@ -291,6 +369,14 @@ pub(crate) fn parse_header(file: &[u8]) -> PyResult<Value> {
             "unsupported rapidbm25 index format {format}"
         )));
     }
+    match header.get("endian").and_then(|v| v.as_str()) {
+        Some("little") => {}
+        _ => {
+            return Err(PyValueError::new_err(
+                "index endian must be \"little\" (this build only reads little-endian files)",
+            ))
+        }
+    }
     Ok(header)
 }
 
@@ -334,6 +420,9 @@ pub(crate) fn load_static_bytes(file: &[u8]) -> PyResult<Index> {
     }
     if n_offsets != n_terms + 1 || n_dto != n_docs + 1 {
         return Err(PyValueError::new_err("inconsistent offset table lengths"));
+    }
+    if post_doc_off % 4 != 0 || dtt_off % 4 != 0 || dtf_off % 4 != 0 {
+        return Err(PyValueError::new_err("u32 section is not 4-byte aligned"));
     }
     let doc_len = read_u64s(file, doc_len_off, n_docs)?;
     let idf = read_f64s(file, idf_off, n_terms)?;
@@ -394,6 +483,15 @@ fn finish_owned(
     if idf.len() != terms.len() {
         return Err(PyValueError::new_err("idf length does not match vocabulary"));
     }
+    validate_static_columns(
+        doc_len.len(),
+        terms.len(),
+        &offsets_u,
+        &post_doc,
+        &doc_terms_off_u,
+        &doc_terms_tid,
+        &doc_terms_tf,
+    )?;
     let mut lookup = FxHashMap::default();
     for (i, t) in terms.iter().enumerate() {
         lookup.insert(t.clone(), i as u32);
@@ -462,24 +560,43 @@ fn load_static_mapped(mmap: Mmap) -> PyResult<Index> {
     let (idf_off, n_terms) = section_pair(sections, "idf")?;
     let (offsets_off, n_offsets) = section_pair(sections, "offsets")?;
     let (post_doc_off, n_posts) = section_pair(sections, "post_doc")?;
-    let (post_tf_off, _) = section_pair(sections, "post_tf")?;
-    let (norm_off, _) = section_pair(sections, "norm")?;
-    let (dto_off, _) = section_pair(sections, "doc_terms_off")?;
+    let (post_tf_off, n_posts2) = section_pair(sections, "post_tf")?;
+    let (norm_off, n_norm) = section_pair(sections, "norm")?;
+    let (dto_off, n_dto) = section_pair(sections, "doc_terms_off")?;
     let (dtt_off, n_doc_terms) = section_pair(sections, "doc_terms_tid")?;
-    let (dtf_off, _) = section_pair(sections, "doc_terms_tf")?;
+    let (dtf_off, n_doc_terms2) = section_pair(sections, "doc_terms_tf")?;
     let (terms_off, terms_len) = section_pair(sections, "terms")?;
-    // Validate every numeric span before keeping the map.
+    // Validate every numeric span, alignment, and posting id before keeping the map.
+    if n_offsets != n_terms + 1 || n_dto != n_docs + 1 {
+        return Err(PyValueError::new_err("inconsistent offset table lengths"));
+    }
+    if n_posts != n_posts2 || n_doc_terms != n_doc_terms2 || n_norm != n_docs {
+        return Err(PyValueError::new_err("inconsistent section lengths"));
+    }
+    if post_doc_off % 4 != 0 || dtt_off % 4 != 0 || dtf_off % 4 != 0 {
+        return Err(PyValueError::new_err("u32 section is not 4-byte aligned"));
+    }
     let _ = read_u64s(&mmap, doc_len_off, n_docs)?;
     let _ = read_f64s(&mmap, idf_off, n_terms)?;
-    let _ = read_u64s(&mmap, offsets_off, n_offsets)?;
-    let _ = read_u32s(&mmap, post_doc_off, n_posts)?;
+    let offsets_u = read_u64s(&mmap, offsets_off, n_offsets)?;
+    let post_doc = read_u32s(&mmap, post_doc_off, n_posts)?;
     let _ = read_f64s(&mmap, post_tf_off, n_posts)?;
     let _ = read_f64s(&mmap, norm_off, n_docs)?;
-    let _ = read_u64s(&mmap, dto_off, n_docs + 1)?;
-    let _ = read_u32s(&mmap, dtt_off, n_doc_terms)?;
-    let _ = read_u32s(&mmap, dtf_off, n_doc_terms)?;
-    let term_bytes = need(&mmap, terms_off, terms_len)?;
+    let doc_terms_off_u = read_u64s(&mmap, dto_off, n_docs + 1)?;
+    let doc_terms_tid = read_u32s(&mmap, dtt_off, n_doc_terms)?;
+    let doc_terms_tf = read_u32s(&mmap, dtf_off, n_doc_terms)?;
+    let n_docs_us = usize::try_from(n_docs).map_err(|_| PyValueError::new_err("overflow"))?;
     let n_terms_us = usize::try_from(n_terms).map_err(|_| PyValueError::new_err("overflow"))?;
+    validate_static_columns(
+        n_docs_us,
+        n_terms_us,
+        &offsets_u,
+        &post_doc,
+        &doc_terms_off_u,
+        &doc_terms_tid,
+        &doc_terms_tf,
+    )?;
+    let term_bytes = need(&mmap, terms_off, terms_len)?;
     let terms = read_strings(term_bytes, n_terms_us)?;
     let mut lookup = FxHashMap::default();
     for (i, t) in terms.iter().enumerate() {
@@ -488,7 +605,6 @@ fn load_static_mapped(mmap: Mmap) -> PyResult<Index> {
     // Absent-partial is a property of `norm`. Touch the mapped norm once.
     let norm_tmp = read_f64s(&mmap, norm_off, n_docs)?;
     let absent_partial = crate::score::absent_uniform(variant, &norm_tmp, k1);
-    let n_docs_us = usize::try_from(n_docs).map_err(|_| PyValueError::new_err("overflow"))?;
     Ok(Index {
         variant,
         k1,
@@ -636,9 +752,14 @@ pub(crate) fn load_live_docs(file: &[u8]) -> PyResult<(Value, Vec<LiveDoc>)> {
     if bytes.len() < 8 {
         return Err(PyValueError::new_err("truncated live index"));
     }
-    let n = u64::from_le_bytes(bytes[0..8].try_into().unwrap()) as usize;
+    let n = u64::from_le_bytes(bytes[0..8].try_into().unwrap());
+    // Each document is at least one length prefix. A huge `n` must not allocate.
+    if n > (bytes.len() - 8) as u64 {
+        return Err(PyValueError::new_err("live index document count exceeds the section"));
+    }
+    let n = n as usize;
     let mut i = 8;
-    let mut docs = Vec::with_capacity(n);
+    let mut docs = Vec::new();
     for _ in 0..n {
         let id = read_one_str(bytes, &mut i)?;
         let text = read_one_str(bytes, &mut i)?;
@@ -646,9 +767,13 @@ pub(crate) fn load_live_docs(file: &[u8]) -> PyResult<(Value, Vec<LiveDoc>)> {
         if i + 8 > bytes.len() {
             return Err(PyValueError::new_err("truncated live index"));
         }
-        let nt = u64::from_le_bytes(bytes[i..i + 8].try_into().unwrap()) as usize;
+        let nt = u64::from_le_bytes(bytes[i..i + 8].try_into().unwrap());
+        if nt > (bytes.len() - (i + 8)) as u64 {
+            return Err(PyValueError::new_err("live index token count exceeds the section"));
+        }
+        let nt = nt as usize;
         i += 8;
-        let mut tokens = Vec::with_capacity(nt);
+        let mut tokens = Vec::new();
         for _ in 0..nt {
             tokens.push(read_one_str(bytes, &mut i)?);
         }

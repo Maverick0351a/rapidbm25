@@ -15,8 +15,11 @@ Nothing leaves the machine. Text indexes live in memory. A folder index is also 
 under `RAPIDBM25_CACHE` (default `~/.cache/rapidbm25`). The next `bm25_index_path` for the
 same folder, glob, and parameters loads that cache and reindexes only files whose size
 or mtime changed; removed files lose their chunks. The folder index is a `LiveIndex`,
-so `fixes=True` (query-token dedupe and the exact-zero Okapi idf floor). The tool
-result includes `chunks`, `files_reindexed`, and `from_cache`.
+so `fixes=True` (query-token dedupe and the exact-zero Okapi idf floor). Symlinks
+are not followed, hardlinks (`st_nlink > 1`) and dotfiles are skipped unless the
+glob's filename starts with `.`, and the cache directory is mode `0700` with files
+mode `0600`. A file is reused only when size, mtime, and the SHA-256 of the indexed
+bytes still match. The tool result includes `chunks`, `files_reindexed`, and `from_cache`.
 
 Client config:
 

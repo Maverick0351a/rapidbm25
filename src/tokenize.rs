@@ -64,6 +64,8 @@ fn is_cjk(ch: char) -> bool {
         || (0xF900..=0xFAFF).contains(&u)
         || (0x20000..=0x2A6DF).contains(&u)
         || (0x2A700..=0x2B73F).contains(&u)
+        // Halfwidth katakana (U+FF65..U+FF9F), including the halfwidth ideographic marks.
+        || (0xFF65..=0xFF9F).contains(&u)
 }
 
 #[pyclass(frozen, module = "rapidbm25._native")]

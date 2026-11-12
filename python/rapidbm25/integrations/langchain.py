@@ -85,7 +85,7 @@ class BM25Retriever(BaseRetriever):
 
     def _get_relevant_documents(self, query: str, *, run_manager: CallbackManagerForRetrieverRun) -> list[Document]:
         del run_manager
-        hits = self._live.search(query, k=self.k)
+        hits = self._live.search_terms(query, k=self.k)
         docs = []
         for hit in hits:
             meta = dict(hit["metadata"])

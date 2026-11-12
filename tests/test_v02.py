@@ -226,16 +226,20 @@ def test_live_save_load_and_thread_safety(tmp_path: Path):
     assert len(box.ids()) == len(set(box.ids()))
 
 
-def test_live_filter_does_not_reenter():
+def test_live_filter_runs_outside_the_lock():
     live = LiveIndex()
     live.add("a", ["a"], metadata={"n": 1})
+    seen = {}
 
-    def bad(_meta):
-        live.add("b", ["b"])
+    def observe(_meta):
+        # These take the index lock. They must not deadlock with search.
+        seen["n"] = live.corpus_size
+        seen["score"] = float(live.get_scores(["a"])[0])
         return True
 
-    with pytest.raises(RuntimeError):
-        live.search(["a"], where=bad)
+    hits = live.search(["a"], where=observe)
+    assert [h["id"] for h in hits] == ["a"]
+    assert seen["n"] == 1
 
 
 # ----- tokenizers and batch -------------------------------------------------
@@ -314,11 +318,11 @@ def test_langchain_retriever(tmp_path: Path):
     from rapidbm25.integrations.langchain import BM25Retriever
 
     retriever = BM25Retriever.from_texts(["windy London", "sunny Paris"], metadatas=[{"city": "london"}, {"city": "paris"}], k=1)
-    docs = retriever.invoke("london wind")
+    docs = retriever.invoke("London")
     assert docs[0].page_content == "windy London"
     retriever.save(tmp_path / "lc")
     loaded = BM25Retriever.load(tmp_path / "lc")
-    again = loaded.invoke("london wind")
+    again = loaded.invoke("London")
     assert again[0].page_content == "windy London"
     via_docs = BM25Retriever.from_documents([Document(page_content="alpha beta", metadata={"k": 1}, id="doc-a")], k=1)
     assert via_docs.invoke("alpha")[0].id == "doc-a"

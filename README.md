@@ -73,13 +73,16 @@ BM25L([d.split(" ") for d in docs], compat="47aa3dd")
 ```python
 okapi_ix = BM25Okapi([d.split(" ") for d in docs])
 okapi_ix.save("/tmp/rapidbm25-okapi.rbm25")
-okapi_loaded = BM25Okapi.load("/tmp/rapidbm25-okapi.rbm25")   # mmap=True on 64-bit little-endian
+okapi_loaded = BM25Okapi.load("/tmp/rapidbm25-okapi.rbm25")   # copies into memory
 ```
 
 `save` writes format 1: magic `RBM25`, a JSON header, then little-endian numeric columns.
 Floats are stored as raw IEEE-754 bits, so `get_scores` after `load` matches the index that
-was saved, bit for bit. `load(mmap=False)` copies the columns instead. Do not overwrite a
-file that a mapped index still has open. Pickle keeps a picklable `tokenizer`; the file
+was saved, bit for bit. The default ``load`` copies the columns into memory, so later truncation or
+in-place edits of the file cannot change scores or kill the process.
+``load(mmap=True)`` maps the caller's file and is unsafe if that file changes:
+truncation can raise SIGBUS, and an in-place write can change scores. Pickle
+keeps a picklable `tokenizer`; the file
 format stores the tokens already in the index, not an arbitrary callable.
 
 ## Live index
@@ -109,8 +112,9 @@ fused = fuse([["dogs", "cats"], [("cats", 0.9), ("weather", 0.2)]], method="rrf"
 ```
 
 `where` is a dict (`$eq`, `$ne`, `$in`, `$nin`, `$gt`, `$gte`, `$lt`, `$lte`, `$exists`)
-or a callable. The callable must not call back into the index. `search` / `add` /
-`delete` / `update` take a lock, so several threads can share one `LiveIndex`.
+or a callable. `$in` and `$nin` take a list, not a string. A boolean does not match
+`0` or `1`. The callable runs outside the index lock. `add` / `delete` / `update`
+take a lock, so several threads can share one `LiveIndex`.
 
 `variant` is `"okapi"` (default), `"l"`, or `"plus"`. `compat` is `"0.2.2"` or
 `"47aa3dd"`, same as the static classes. `delta` defaults to 0.5 for L and 1 for Plus.
@@ -169,8 +173,8 @@ pip install "rapidbm25[llama-index]"    # llama-index-core
 
 ```python
 from rapidbm25.integrations.langchain import BM25Retriever
-retriever = BM25Retriever.from_texts(["windy London", "sunny Paris"], k=1)
-retriever.invoke("windy")
+retriever = BM25Retriever.from_texts(["sunny Paris", "windy London"], k=1)
+assert retriever.invoke("windy")[0].page_content == "windy London"
 ```
 
 `BM25Retriever.from_documents` accepts LangChain `Document` objects.
@@ -258,9 +262,12 @@ python bench/bench_interleaved.py --workloads /tmp/bm25-wl --out /tmp/bench.json
 `rapidbm25-mcp` is a stdio MCP server shipped in the wheel (no MCP SDK dependency):
 `bm25_index_texts`, `bm25_index_path`, `bm25_search`, `bm25_list_indexes`, `bm25_drop_index`.
 Text indexes live in memory. `bm25_index_path` caches the folder index under
-`RAPIDBM25_CACHE` (default `~/.cache/rapidbm25`) and reindexes only files whose size or
-mtime changed. It only reads inside `RAPIDBM25_ROOTS` (default: the working directory).
-Nothing leaves the machine.
+`RAPIDBM25_CACHE` (default `~/.cache/rapidbm25`, directory mode `0700`, files mode `0600`).
+A cached file is reused only when its size, mtime, and the SHA-256 of the bytes that
+were indexed still match; the path is statted again after the read. Symlinks are not
+followed. Files with another hard link (`st_nlink > 1`) are skipped. Dotfiles are
+skipped unless the glob's filename starts with `.`. Reads stay inside `RAPIDBM25_ROOTS`
+(default: the working directory). Nothing leaves the machine.
 
 ```json
 { "mcpServers": { "rapidbm25": { "command": "uvx", "args": ["--from", "rapidbm25", "rapidbm25-mcp"],

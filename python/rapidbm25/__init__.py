@@ -138,7 +138,9 @@ class BM25:
         assert all(di < self.corpus_size for di in doc_ids)
         if len(doc_ids) == 0:
             return []
-        return self.get_scores(query)[np.asarray(doc_ids, dtype=np.int64)].tolist()
+        # Index with the original ids. Casting to int64 first would turn 1.9 into 1
+        # and True into 1; rank_bm25 raises IndexError for those.
+        return self.get_scores(query)[list(doc_ids)].tolist()
 
     def top_n(self, query: Sequence[str], n: int = 5):
         """(doc_ids, scores) of the n best docs. Score descending; ties go to the lower doc id."""
@@ -158,14 +160,22 @@ class BM25:
         self._index.save(os.fspath(path))
 
     @classmethod
-    def load(cls, path: str, *, mmap: bool = True):
+    def load(cls, path: str, *, mmap: bool = False):
         """Load an index written by :meth:`save`.
 
-        ``mmap=True`` (default) scores from a read-only mapping on 64-bit
-        little-endian hosts. Do not overwrite ``path`` while the returned
-        object is alive. A tokenizer callable is not stored in the file; the
-        index already holds the tokens it was built from. Pickle keeps a
-        picklable tokenizer.
+        The default copies the file into owned memory. After ``load`` returns,
+        scores do not depend on the file: truncating or overwriting it does
+        not change this object and cannot kill the process.
+
+        ``mmap=True`` maps the caller's file and is unsafe if that file is
+        truncated or written in place while the index is alive. Truncation can
+        deliver SIGBUS. An in-place write can change later scores with no
+        error. Use it only when the file stays immutable for the life of the
+        index. On hosts that are not 64-bit little-endian, ``mmap=True`` still
+        copies.
+
+        A tokenizer callable is not stored in the file; the index already holds
+        the tokens it was built from. Pickle keeps a picklable tokenizer.
         """
         index = _native.Index.load(os.fspath(path), mmap=bool(mmap))
         name = index.class_name

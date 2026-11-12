@@ -49,13 +49,21 @@ def _public_variant(native: str) -> str:
     return "okapi"
 
 
+def _equal(left, right) -> bool:
+    """Equality that does not treat ``True`` as ``1``."""
+    if isinstance(left, bool) or isinstance(right, bool):
+        return isinstance(left, bool) and isinstance(right, bool) and left == right
+    return left == right
+
+
 def _match(meta: dict, where) -> bool:
     """Structured metadata filter.
 
     ``where`` is a callable ``meta -> bool``, or a dict of field to either a
     value (equality) or an operator dict. Operators: ``$eq $ne $in $nin $gt
     $gte $lt $lte $exists``. Comparisons other than ``$exists`` fail when the
-    field is absent. A callable must not call back into the index.
+    field is absent. ``$in`` / ``$nin`` take a list, not a string. Booleans do not
+    match ``0`` or ``1``. A callable runs outside the index lock.
     """
     if callable(where):
         return bool(where(meta))
@@ -70,9 +78,21 @@ def _match(meta: dict, where) -> bool:
                     if bool(has) != bool(operand):
                         return False
                     continue
+                if op in ("$in", "$nin") and (isinstance(operand, (str, bytes)) or not isinstance(operand, (list, tuple))):
+                    raise ValueError(f"{op} expects a list of values")
                 if not has:
                     return False
-                if op == "$eq":
+                if isinstance(val, bool) or isinstance(operand, bool):
+                    if op in ("$eq", "$ne"):
+                        same = _equal(val, operand)
+                        ok = same if op == "$eq" else not same
+                    elif op == "$in":
+                        ok = any(_equal(val, item) for item in operand)
+                    elif op == "$nin":
+                        ok = all(not _equal(val, item) for item in operand)
+                    else:
+                        ok = False
+                elif op == "$eq":
                     ok = val == operand
                 elif op == "$ne":
                     ok = val != operand
@@ -92,7 +112,7 @@ def _match(meta: dict, where) -> bool:
                     raise ValueError(f"unknown filter operator {op!r}")
                 if not ok:
                     return False
-        elif not has or val != cond:
+        elif not has or not _equal(val, cond):
             return False
     return True
 
@@ -208,6 +228,7 @@ class LiveIndex:
         self._native = _native.LiveIndex(native, self.k1, self.b, self.epsilon, self.delta, self.fixes)
         self._lock = threading.Lock()
         self._tls = threading.local()
+        self._gen = 0
 
     def _guard(self) -> _Guard:
         return _Guard(self)
@@ -286,11 +307,15 @@ class LiveIndex:
         meta = json.dumps({} if metadata is None else metadata, separators=(",", ":"), ensure_ascii=False)
         with self._guard():
             self._native.add(str(id), tokens, raw, meta)
+            self._gen += 1
 
     def delete(self, id: str) -> bool:
         """Remove a document. Returns False if the id is unknown. Other ids stay put."""
         with self._guard():
-            return bool(self._native.delete(str(id)))
+            removed = bool(self._native.delete(str(id)))
+            if removed:
+                self._gen += 1
+            return removed
 
     def update(self, id: str, text, metadata: Optional[dict] = None) -> None:
         """Replace a document's text, keeping its position. ``metadata=None`` keeps the old metadata."""
@@ -298,34 +323,44 @@ class LiveIndex:
         meta = None if metadata is None else json.dumps(metadata, separators=(",", ":"), ensure_ascii=False)
         with self._guard():
             self._native.update(str(id), tokens, raw, meta)
+            self._gen += 1
 
     def get_scores(self, query):
         """float64 scores in insertion order. Bit-identical to the matching static class on :meth:`corpus`."""
+        tokens = self._prepare_query(query)
         with self._guard():
-            return self._native.get_scores(self._prepare_query(query))
+            return self._native.get_scores(tokens)
 
     def get_scores_many(self, queries: Sequence):
         """``(n_queries, corpus_size)`` float64. GIL released; one thread per query."""
+        tokenized = [self._prepare_query(q) for q in queries]
         with self._guard():
-            tokenized = [self._prepare_query(q) for q in queries]
             return self._native.get_scores_many(tokenized)
 
     def search(self, query, k: int = 10, where=None) -> list[dict]:
         """Top-k hits as dicts: ``rank``, ``id``, ``score``, ``text``, ``metadata``.
 
-        ``where`` filters metadata before ranking (see module docs). Scores are
-        the raw BM25 values, not rounded.
+        ``where`` filters metadata before ranking (see module docs). The
+        callable runs without the index lock held, so it may query another
+        index. Scores are the raw BM25 values, not rounded.
         """
-        with self._guard():
-            tokens = self._prepare_query(query)
-            n = int(self._native.corpus_size)
+        tokens = self._prepare_query(query)
+        rows = None
+        for _ in range(64):
+            with self._guard():
+                gen = self._gen
+                n = int(self._native.corpus_size)
+                metas = None if where is None else [json.loads(m) if m else {} for m in self._native.metas()]
             if n == 0 or k <= 0:
                 return []
-            mask = None
-            if where is not None:
-                metas = [json.loads(m) if m else {} for m in self._native.metas()]
-                mask = [_match(m, where) for m in metas]
-            rows = self._native.search(tokens, int(k), mask)
+            mask = None if metas is None else [_match(m, where) for m in metas]
+            with self._guard():
+                if self._gen != gen:
+                    continue
+                rows = self._native.search(tokens, int(k), mask)
+                break
+        if rows is None:
+            raise RuntimeError("index kept changing during search")
         out = []
         for rank, (doc_id, score, text, meta) in enumerate(rows, start=1):
             out.append({
@@ -335,6 +370,32 @@ class LiveIndex:
                 "text": text,
                 "metadata": json.loads(meta) if meta else {},
             })
+        return out
+
+    def search_terms(self, query: str, k: int = 10) -> list[dict]:
+        """Like :meth:`search`, dropping documents that share no query term.
+
+        Same over-fetch as :class:`rapidbm25.textindex.TextIndex`. A 2-document
+        Okapi index scores every term 0, so rank alone would return the first
+        document even when it does not contain the query.
+        """
+        def terms_of(text: str) -> set:
+            if self.tokenizer is not None:
+                return set(self.tokenizer(text))
+            return set(text.split())
+
+        qterms = terms_of(query)
+        if not qterms or k <= 0:
+            return []
+        n = self.corpus_size
+        raw = self.search(query, k=min(n, max(k * 4, k + 50)))
+        out = []
+        for hit in raw:
+            if qterms.isdisjoint(terms_of(hit["text"])):
+                continue
+            out.append(hit)
+            if len(out) >= k:
+                break
         return out
 
     def save(self, path: str) -> None:
@@ -350,6 +411,7 @@ class LiveIndex:
         self.tokenizer = _tokenizer_from_tag(tag)
         self._lock = threading.Lock()
         self._tls = threading.local()
+        self._gen = 0
         return self._bind(native)
 
     def __reduce__(self):

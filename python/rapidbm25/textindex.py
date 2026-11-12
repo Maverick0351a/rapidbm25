@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -66,33 +67,125 @@ def check_path(path: str) -> Path:
     raise PermissionError(f"{p} is outside the allowed roots (set RAPIDBM25_ROOTS)")
 
 
+def _glob_asks_for_dotfile(pattern: str) -> bool:
+    """True when the filename part of the glob itself starts with a dot.
+
+    Python's ``fnmatch("*", ".env")`` is true. A shell glob does not match
+    dotfiles, and neither does a folder index, unless the pattern asks.
+    """
+    name = pattern.replace("\\", "/").split("/")[-1]
+    return name.startswith(".")
+
+
+def _name_selected(name: str, pattern: str) -> bool:
+    if name.startswith(".") and not _glob_asks_for_dotfile(pattern):
+        return False
+    return fnmatch.fnmatch(name, pattern)
+
+
+def _under_root(path: Path, root: Path) -> bool:
+    try:
+        resolved = path.resolve()
+        root_resolved = root.resolve()
+    except OSError:
+        return False
+    return resolved == root_resolved or root_resolved in resolved.parents
+
+
+def read_regular_under_root(path: Path, root: Path) -> bytes | None:
+    """Read a regular file that stays inside ``root``.
+
+    Symlinks are skipped (``lstat`` plus ``O_NOFOLLOW``). Hardlinks
+    (``st_nlink > 1``) are skipped too: another name for the same inode can
+    sit outside the allowed root, and ``resolve()`` does not reveal it.
+    The resolved path of a symlink must also stay under ``root``.
+    """
+    try:
+        st = path.lstat()
+    except OSError:
+        return None
+    if not stat.S_ISREG(st.st_mode) or st.st_nlink > 1 or st.st_size > MAX_FILE_BYTES:
+        return None
+    if not _under_root(path, root):
+        return None
+    flags = os.O_RDONLY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        fd = os.open(os.fspath(path), flags)
+    except OSError:
+        return None
+    try:
+        st2 = os.fstat(fd)
+        if not stat.S_ISREG(st2.st_mode) or st2.st_nlink > 1 or st2.st_size > MAX_FILE_BYTES:
+            return None
+        chunks = []
+        remaining = st2.st_size
+        while remaining > 0:
+            block = os.read(fd, min(remaining, 1024 * 1024))
+            if not block:
+                break
+            chunks.append(block)
+            remaining -= len(block)
+        return b"".join(chunks)
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+
+
+def snapshot_file(path: Path, root: Path):
+    """Return ``(stat, bytes, sha256)`` for bytes that still match a later stat.
+
+    Retries when mtime, size, or inode move between the read and the re-stat,
+    so a rewrite cannot pin a stale hash to a new timestamp.
+    """
+    for _ in range(4):
+        try:
+            before = path.lstat()
+        except OSError:
+            return None
+        raw = read_regular_under_root(path, root)
+        try:
+            after = path.lstat()
+        except OSError:
+            return None
+        if raw is None:
+            return None
+        stable = (
+            stat.S_ISREG(before.st_mode)
+            and stat.S_ISREG(after.st_mode)
+            and before.st_nlink == 1
+            and after.st_nlink == 1
+            and before.st_mtime_ns == after.st_mtime_ns
+            and before.st_size == after.st_size
+            and before.st_ino == after.st_ino
+        )
+        if stable:
+            return after, raw, hashlib.sha256(raw).hexdigest()
+    return None
+
+
 def iter_files(root: Path, glob: str, max_files: int) -> list[Path]:
     if root.is_file():
         return [root]
     files = []
     if root.is_dir():
-        for dp, dns, fns in os.walk(root):
+        for dp, dns, fns in os.walk(root, followlinks=False):
             dns[:] = [d for d in dns if d not in SKIP_DIRS and not d.startswith(".")]
             for fn in fns:
-                if fnmatch.fnmatch(fn, glob):
+                if _name_selected(fn, glob):
                     files.append(Path(dp) / fn)
                     if len(files) >= max_files:
                         return files
     return files
 
 
-def chunk_file(path: Path, root: Path, chunk_lines: int, overlap: int) -> tuple[list[str], list[str]]:
+def chunk_bytes(raw: bytes, rel: str, chunk_lines: int, overlap: int) -> tuple[list[str], list[str]]:
+    if b"\0" in raw[:4096]:
+        return [], []
+    lines = raw.decode("utf-8", errors="replace").splitlines()
     ids, texts = [], []
-    try:
-        if path.stat().st_size > MAX_FILE_BYTES:
-            return ids, texts
-        raw = path.read_bytes()
-        if b"\0" in raw[:4096]:
-            return ids, texts
-        lines = raw.decode("utf-8", errors="replace").splitlines()
-    except OSError:
-        return ids, texts
-    rel = path.relative_to(root) if root.is_dir() else Path(path.name)
     step = max(1, chunk_lines - overlap)
     for start in range(0, max(1, len(lines)), step):
         body = "\n".join(lines[start:start + chunk_lines])
@@ -104,6 +197,14 @@ def chunk_file(path: Path, root: Path, chunk_lines: int, overlap: int) -> tuple[
     return ids, texts
 
 
+def chunk_file(path: Path, root: Path, chunk_lines: int, overlap: int) -> tuple[list[str], list[str]]:
+    raw = read_regular_under_root(path, root)
+    if raw is None:
+        return [], []
+    rel = str(path.relative_to(root) if root.is_dir() else Path(path.name))
+    return chunk_bytes(raw, rel, chunk_lines, overlap)
+
+
 def chunk_path(path: str, glob: str = "*", chunk_lines: int = 40, overlap: int = 10,
                max_files: int = 5000) -> tuple[list[str], list[str]]:
     root = check_path(path)
@@ -113,6 +214,30 @@ def chunk_path(path: str, glob: str = "*", chunk_lines: int = 40, overlap: int =
         ids.extend(more_ids)
         texts.extend(more_texts)
     return ids, texts
+
+
+def _ensure_private_dir(path: Path) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    if os.name != "nt":
+        os.chmod(path, 0o700)
+
+
+def _restrict(path: Path) -> None:
+    if os.name != "nt":
+        os.chmod(path, 0o600)
+
+
+def _write_private(path: Path, data: bytes) -> None:
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    fd = os.open(os.fspath(path), flags, 0o600)
+    try:
+        os.write(fd, data)
+        if os.name != "nt":
+            os.fchmod(fd, 0o600)
+    finally:
+        os.close(fd)
 
 
 def cache_root() -> Path:
@@ -160,25 +285,29 @@ class PathIndex:
         seen = set()
         reindexed = 0
         for f in iter_files(root, glob, max_files):
-            try:
-                st = f.stat()
-            except OSError:
-                continue
             rel = str(f.relative_to(root) if root.is_dir() else Path(f.name))
+            snap = snapshot_file(f, root)
+            if snap is None:
+                continue
+            st, raw, digest = snap
             seen.add(rel)
             prev = self.files.get(rel)
-            if prev and prev["mtime_ns"] == st.st_mtime_ns and prev["size"] == st.st_size:
+            if (prev and prev.get("mtime_ns") == st.st_mtime_ns and prev.get("size") == st.st_size
+                    and prev.get("sha256") == digest):
                 continue
             reindexed += 1
             if prev:
                 for cid in prev["chunk_ids"]:
                     self.live.delete(cid)
                     self.sets.pop(cid, None)
-            ids, texts = chunk_file(f, root, chunk_lines, overlap)
+            ids, texts = chunk_bytes(raw, rel, chunk_lines, overlap)
             for cid, text in zip(ids, texts):
                 self.live.add(cid, text, metadata={"path": rel})
                 self._remember(cid, text)
-            self.files[rel] = {"mtime_ns": st.st_mtime_ns, "size": st.st_size, "chunk_ids": ids}
+            self.files[rel] = {
+                "mtime_ns": st.st_mtime_ns, "size": st.st_size, "sha256": digest,
+                "ino": int(st.st_ino), "chunk_ids": ids,
+            }
         for rel in list(self.files):
             if rel not in seen:
                 for cid in self.files[rel]["chunk_ids"]:
@@ -191,12 +320,16 @@ class PathIndex:
         return stats
 
     def save_cache(self, loc: Path) -> None:
-        loc.mkdir(parents=True, exist_ok=True)
-        self.live.save(loc / "index.rbm25")
-        manifest = {"format": 1, "variant": self.variant, "params": self.params, "files": self.files}
-        tmp = loc / "manifest.json.tmp"
-        tmp.write_text(json.dumps(manifest), encoding="utf-8")
-        tmp.replace(loc / "manifest.json")
+        _ensure_private_dir(loc.parent)
+        _ensure_private_dir(loc)
+        previous = os.umask(0o077)
+        try:
+            self.live.save(loc / "index.rbm25")
+            manifest = {"format": 1, "variant": self.variant, "params": self.params, "files": self.files}
+            _write_private(loc / "manifest.json", json.dumps(manifest).encode("utf-8"))
+            _restrict(loc / "index.rbm25")
+        finally:
+            os.umask(previous)
 
     def load_cache(self, loc: Path) -> None:
         self.live = LiveIndex.load(loc / "index.rbm25")
