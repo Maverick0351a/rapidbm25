@@ -1,0 +1,27 @@
+# rapidbm25
+
+> Rust-native BM25 (Okapi, L, Plus) for Python. Drop-in for rank_bm25: same API, bit-identical scores, ~1,470x faster get_scores, fast top_n. Includes a stdio MCP server and an agent skill for local keyword search over code and docs. Apache-2.0. No network use.
+
+## Install
+- `pip install rapidbm25`. Wheels: CPython 3.9-3.15, Linux glibc/musl x86_64+aarch64, macOS x86_64+arm64, Windows x86_64
+
+## Python API
+- `from rapidbm25 import BM25Okapi, BM25L, BM25Plus` (same constructors as rank_bm25: corpus, tokenizer=None, k1=1.5, b=0.75, epsilon=0.25 | delta; BM25L/BM25Plus also take compat="0.2.2" (default, the PyPI release) or "47aa3dd" (git main))
+- `bm25.get_scores(tokens) -> numpy.float64[corpus_size]`
+- `bm25.get_batch_scores(tokens, doc_ids) -> list[float]`
+- `bm25.get_top_n(tokens, documents, n=5) -> list` (ties: lower doc id first)
+- `bm25.top_n(tokens, n) -> (ids: int64[], scores: float64[])` (fast partial select)
+- `rapidbm25.top_k_of(scores, k) -> int64[]`
+
+## MCP server
+- Command: `rapidbm25-mcp` (stdio). Env: `RAPIDBM25_ROOTS` limits which folders can be indexed.
+- Tools: `bm25_index_texts(index, documents, ids?, variant?, k1?, b?)`, `bm25_index_path(index, path, glob?, chunk_lines?, overlap?)`, `bm25_search(index, query, k?)`, `bm25_list_indexes()`, `bm25_drop_index(index)`
+
+## Agent skill
+- `skill/rapidbm25-search/SKILL.md`; run `python scripts/bm25_search.py --path DIR --query "terms" -k 10 [--glob "*.py"] [--json]`
+
+## Docs
+- [README](https://github.com/Maverick0351a/rapidbm25/blob/main/README.md): differences from rank_bm25, benchmarks with machine info
+- [Behavior contract](https://github.com/Maverick0351a/rapidbm25/blob/main/contract/bm25.contract.json): formulas, constants, open questions, 407 observed test vectors
+- [MCP server](https://github.com/Maverick0351a/rapidbm25/blob/main/mcp/README.md) and [server.json](https://github.com/Maverick0351a/rapidbm25/blob/main/server.json)
+- [Changelog](https://github.com/Maverick0351a/rapidbm25/blob/main/CHANGELOG.md), [Security](https://github.com/Maverick0351a/rapidbm25/blob/main/SECURITY.md)

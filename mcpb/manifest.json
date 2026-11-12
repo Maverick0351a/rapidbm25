@@ -1,0 +1,44 @@
+{
+  "manifest_version": "0.4",
+  "name": "rapidbm25",
+  "display_name": "rapidbm25 (BM25 keyword search)",
+  "version": "0.1.0",
+  "description": "Fast local BM25 keyword search over texts or a code/docs folder. Rust core, no network.",
+  "long_description": "Build in-memory BM25 indexes from a list of texts or from the files under a local folder, then run ranked keyword search. Good for exact identifiers, error strings and rare terms. Scoring is bit for bit identical to rank_bm25. Indexes live in memory; nothing leaves the machine; folder indexing is limited to the allowed directories.",
+  "author": { "name": "Travis Johnson", "url": "https://github.com/Maverick0351a" },
+  "repository": { "type": "git", "url": "https://github.com/Maverick0351a/rapidbm25.git" },
+  "homepage": "https://github.com/Maverick0351a/rapidbm25",
+  "support": "https://github.com/Maverick0351a/rapidbm25/issues",
+  "server": {
+    "type": "uv",
+    "entry_point": "src/server.py",
+    "mcp_config": {
+      "command": "uv",
+      "args": ["run", "--directory", "${__dirname}", "src/server.py"],
+      "env": { "RAPIDBM25_ROOTS": "${user_config.allowed_directories}" }
+    }
+  },
+  "user_config": {
+    "allowed_directories": {
+      "type": "directory",
+      "title": "Allowed directory",
+      "description": "Folder that bm25_index_path may read.",
+      "required": true,
+      "default": "${HOME}"
+    }
+  },
+  "tools": [
+    { "name": "bm25_index_texts", "description": "Build (or replace) a named in-memory BM25 index from a list of text documents." },
+    { "name": "bm25_index_path", "description": "Index text files under a local directory as line-window chunks for keyword search over code or docs." },
+    { "name": "bm25_search", "description": "Ranked BM25 keyword search in a named index; returns ids, scores and snippets." },
+    { "name": "bm25_list_indexes", "description": "List in-memory indexes and their sizes." },
+    { "name": "bm25_drop_index", "description": "Delete a named in-memory index." }
+  ],
+  "tools_generated": false,
+  "keywords": ["bm25", "search", "keyword", "retrieval", "rag", "code search"],
+  "license": "Apache-2.0",
+  "compatibility": {
+    "platforms": ["darwin", "linux", "win32"],
+    "runtimes": { "python": ">=3.9" }
+  }
+}

@@ -1,0 +1,68 @@
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name = "rapidbm25"
+version = "0.1.0"
+description = "Drop-in, Rust-native replacement for rank_bm25's BM25Okapi / BM25L / BM25Plus"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Travis Johnson" }]
+dependencies = ["numpy>=1.24"]
+keywords = ["bm25", "search", "retrieval", "rag", "mcp", "rank_bm25"]
+classifiers = [
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Rust",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: Implementation :: CPython",
+  "Operating System :: OS Independent",
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Topic :: Scientific/Engineering :: Information Analysis",
+  "Topic :: Text Processing :: Indexing",
+]
+
+[project.urls]
+Homepage = "https://github.com/Maverick0351a/rapidbm25"
+Source = "https://github.com/Maverick0351a/rapidbm25"
+Issues = "https://github.com/Maverick0351a/rapidbm25/issues"
+Changelog = "https://github.com/Maverick0351a/rapidbm25/blob/main/CHANGELOG.md"
+
+[project.scripts]
+rapidbm25-mcp = "rapidbm25.mcp_server:main"
+
+[tool.maturin]
+python-source = "python"
+module-name = "rapidbm25._native"
+features = ["pyo3/extension-module"]
+
+# Wheel matrix (see .github/workflows/wheels.yml). CPython only,
+# no free-threaded builds yet. Every wheel is installed and tested in a clean
+# env on its own platform: the pytest suite, a 300-case fuzz against
+# rank_bm25 0.2.2 (installed from PyPI as the oracle), and both contract replays.
+[tool.cibuildwheel]
+build = "cp39-* cp310-* cp311-* cp312-* cp313-* cp314-* cp315-*"
+skip = "*t-*"
+build-verbosity = 1
+test-requires = ["pytest", "rank-bm25==0.2.2"]
+test-command = [
+  "python -m pytest -q -p no:cacheprovider {package}/tests",
+  "python {package}/tests/ci_check.py --cases 300",
+]
+
+[tool.cibuildwheel.linux]
+# Rust + cargo-auditable inside the manylinux/musllinux container (HOME=/root).
+before-all = [
+  "curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal",
+  "env -u RUSTC_WORKSPACE_WRAPPER /root/.cargo/bin/cargo install cargo-auditable --locked",
+]
+environment = { PATH = "/root/.cargo/bin:$PATH", RUSTC_WORKSPACE_WRAPPER = "/root/.cargo/bin/cargo-auditable" }
+environment-pass = ["CARGO_AUDITABLE_ORIG_ARGS"]
+
+[[tool.cibuildwheel.overrides]]
+# Rust's std needs macOS 10.12+; cp39's python.org build defaults to 10.9.
+select = "*-macosx_x86_64"
+environment = { MACOSX_DEPLOYMENT_TARGET = "10.13" }

@@ -1,0 +1,20 @@
+rapidbm25
+Copyright 2026 Travis Johnson (Maverick0351a)
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+API compatibility
+-----------------
+rapidbm25 provides a Python API compatible with rank_bm25
+(https://github.com/dorianbrown/rank_bm25, Apache License 2.0), so that
+`from rapidbm25 import BM25Okapi` can replace `from rank_bm25 import BM25Okapi`.
+The class names, constructor parameters, defaults, attribute names, and the
+BM25 / BM25L / BM25+ scoring formulas follow that project, which was pinned at
+the PyPI 0.2.2 release (default) and git 47aa3dd (compat="47aa3dd")
+for compatibility testing.
+
+rapidbm25's implementation (Rust core and Python wrapper) is new code. No
+rank_bm25 source file is included in this distribution. rank_bm25 is used only
+as a test oracle during development and is not a runtime dependency.
+
+rank_bm25 is not affiliated with or endorsing this project.

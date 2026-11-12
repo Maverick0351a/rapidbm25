@@ -1,0 +1,33 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.Maverick0351a/rapidbm25",
+  "title": "rapidbm25",
+  "description": "Fast local BM25 keyword search over texts or a code/docs folder. Rust core, no network.",
+  "websiteUrl": "https://github.com/Maverick0351a/rapidbm25",
+  "repository": {
+    "url": "https://github.com/Maverick0351a/rapidbm25",
+    "source": "github"
+  },
+  "version": "0.1.0",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "registryBaseUrl": "https://pypi.org",
+      "identifier": "rapidbm25",
+      "version": "0.1.0",
+      "runtimeHint": "uvx",
+      "transport": {
+        "type": "stdio"
+      },
+      "packageArguments": [],
+      "environmentVariables": [
+        {
+          "name": "RAPIDBM25_ROOTS",
+          "description": "Directories bm25_index_path may read (os.pathsep-separated). Default: the working directory.",
+          "isRequired": false,
+          "isSecret": false
+        }
+      ]
+    }
+  ]
+}

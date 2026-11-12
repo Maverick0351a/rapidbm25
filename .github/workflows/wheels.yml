@@ -1,0 +1,181 @@
+name: wheels
+
+# Builds and tests rapidbm25 wheels and the sdist on every platform; uploads them
+# as workflow artifacts. Nothing is published on push or pull_request.
+#
+# Release (manual): Actions > wheels > Run workflow on main with publish=true.
+# That uploads to PyPI with trusted publishing (OIDC, no API token) through the
+# `pypi` environment, then, if mcp_registry=true, publishes server.json to the
+# official MCP Registry with GitHub OIDC (also no token).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Upload this build to PyPI (trusted publishing)"
+        type: boolean
+        default: false
+      mcp_registry:
+        description: "After the PyPI upload, publish server.json to the MCP Registry"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wheels-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
+
+env:
+  # cargo-auditable reads this when it runs as the rustc wrapper under maturin
+  CARGO_AUDITABLE_ORIG_ARGS: '{"offline":false,"locked":false,"frozen":false,"config":[]}'
+
+jobs:
+  wheels:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: linux-x86_64-manylinux,   os: ubuntu-24.04,     skip: "*t-* *-musllinux_*" }
+          - { name: linux-x86_64-musllinux,   os: ubuntu-24.04,     skip: "*t-* *-manylinux_*" }
+          - { name: linux-aarch64-manylinux,  os: ubuntu-24.04-arm, skip: "*t-* *-musllinux_*" }
+          - { name: linux-aarch64-musllinux,  os: ubuntu-24.04-arm, skip: "*t-* *-manylinux_*" }
+          - { name: macos-x86_64,             os: macos-15-intel,   skip: "*t-*" }
+          - { name: macos-arm64,              os: macos-15,         skip: "*t-*" }
+          - { name: windows-amd64,            os: windows-2025,     skip: "*t-*" }
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: Rust (macOS / Windows hosts)
+        if: runner.os != 'Linux'
+        uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-auditable and point rustc at it
+        if: runner.os != 'Linux'
+        shell: bash
+        run: |
+          cargo install cargo-auditable --locked
+          echo "RUSTC_WORKSPACE_WRAPPER=$(python3 -c 'import shutil;print(shutil.which("cargo-auditable"))' 2>/dev/null || python -c 'import shutil;print(shutil.which("cargo-auditable"))')" >> "$GITHUB_ENV"
+
+      - name: Build and test wheels
+        uses: pypa/cibuildwheel@v4.3.5
+        with:
+          output-dir: wheelhouse
+        env:
+          CIBW_SKIP: ${{ matrix.skip }}
+          CIBW_ARCHS: native
+          CIBW_ARCHS_WINDOWS: AMD64
+
+      - name: Check cargo-auditable section in every wheel
+        shell: bash
+        run: python3 scripts/check_auditable.py wheelhouse/*.whl || python scripts/check_auditable.py wheelhouse/*.whl
+
+      - uses: actions/upload-artifact@v7.0.2
+        with:
+          name: wheels-${{ matrix.name }}
+          path: wheelhouse/*.whl
+          if-no-files-found: error
+
+  sdist:
+    name: sdist (build + install from source + test)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v7.1.0
+        with: { python-version: "3.13" }
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build sdist
+        run: |
+          python -m pip install -q "maturin>=1.7,<2"
+          maturin sdist -o dist
+      - name: Install from sdist and test
+        run: |
+          python -m venv /tmp/sd && . /tmp/sd/bin/activate
+          pip install -q dist/rapidbm25-*.tar.gz pytest rank-bm25==0.2.2
+          cd /tmp && python -m pytest -q -p no:cacheprovider "$GITHUB_WORKSPACE/tests"
+          python "$GITHUB_WORKSPACE/tests/ci_check.py" --cases 300
+      - uses: actions/upload-artifact@v7.0.2
+        with:
+          name: sdist
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  metadata:
+    name: metadata (server.json, MCPB manifest)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Validate server.json with mcp-publisher
+        run: |
+          curl -sSfL "https://github.com/modelcontextprotocol/registry/releases/download/v1.8.9/mcp-publisher_linux_amd64.tar.gz" | tar xz mcp-publisher
+          ./mcp-publisher validate server.json
+      - uses: actions/setup-node@v7.1.0
+        with: { node-version: "22" }
+      - name: Validate MCPB manifest
+        run: npx -y @anthropic-ai/mcpb validate mcpb/manifest.json
+
+  summary:
+    needs: [wheels, sdist, metadata]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v8.0.2
+        with: { path: dist, merge-multiple: true }
+      - uses: actions/setup-python@v7.1.0
+        with: { python-version: "3.13" }
+      - name: twine check and list artifacts
+        run: |
+          python -m pip install -q twine
+          twine check --strict dist/*
+          { echo "### rapidbm25 artifacts"; echo; echo '| file | bytes |'; echo '|---|---|'
+            for f in dist/*; do echo "| $(basename "$f") | $(stat -c %s "$f") |"; done; } >> "$GITHUB_STEP_SUMMARY"
+          ls -l dist; echo "count: $(ls dist | wc -l)"
+
+  publish:
+    # Never runs on push or pull_request: manual dispatch on main with publish=true only.
+    if: github.event_name == 'workflow_dispatch' && inputs.publish == true && github.ref == 'refs/heads/main'
+    needs: [summary]
+    runs-on: ubuntu-24.04
+    environment:
+      name: pypi
+      url: https://pypi.org/project/rapidbm25/
+    permissions:
+      id-token: write   # PyPI trusted publishing (OIDC); no API token anywhere
+    steps:
+      - uses: actions/download-artifact@v8.0.2
+        with: { path: dist, merge-multiple: true }
+      - uses: pypa/gh-action-pypi-publish@v1.14.3
+
+  mcp-registry:
+    # Runs only after a successful PyPI upload in the same manual dispatch.
+    if: github.event_name == 'workflow_dispatch' && inputs.publish == true && inputs.mcp_registry == true && github.ref == 'refs/heads/main'
+    needs: [publish]
+    runs-on: ubuntu-24.04
+    environment:
+      name: pypi
+    permissions:
+      id-token: write   # MCP Registry login via GitHub OIDC; no token
+      contents: read
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Wait for the PyPI release to be visible
+        run: |
+          v=$(python3 -c "import json;print(json.load(open('server.json'))['version'])")
+          for i in $(seq 1 30); do
+            curl -sSf "https://pypi.org/pypi/rapidbm25/$v/json" >/dev/null && exit 0
+            sleep 10
+          done
+          echo "rapidbm25 $v not visible on PyPI" >&2; exit 1
+      - name: Publish server.json
+        run: |
+          curl -sSfL "https://github.com/modelcontextprotocol/registry/releases/download/v1.8.9/mcp-publisher_linux_amd64.tar.gz" | tar xz mcp-publisher
+          ./mcp-publisher validate server.json
+          ./mcp-publisher login github-oidc
+          ./mcp-publisher publish server.json
