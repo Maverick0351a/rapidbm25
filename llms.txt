@@ -13,11 +13,11 @@
 - `bm25.top_n(tokens, n) -> (ids: int64[], scores: float64[])` (fast partial select)
 - `rapidbm25.top_k_of(scores, k) -> int64[]`
 - `bm25.save(path)` / `BM25Okapi.load(path, mmap=True)` versioned little-endian file; scores bit-identical after round-trip. Pickle works. `mmap=True` scores from the mapping on 64-bit little-endian.
-- `fixes=False` (default) is bit-exact. `fixes=True`: dedupe repeated query tokens (rank_bm25 #19), allow an empty corpus (#36), floor Okapi idf that is exactly 0 (#39) with `epsilon * average_idf` when that floor is positive.
+- `fixes=False` is the default on BM25Okapi/BM25L/BM25Plus and is bit-exact, including rank_bm25's IDF formula. `fixes=True` (the LiveIndex default): dedupe repeated query tokens (rank_bm25 #19), allow an empty corpus (#36), floor Okapi idf that is exactly 0 (#39) with `epsilon * average_idf` when that floor is positive. No smoothed IDF. On a 2-document corpus the floor is not positive, so a term in one document still has idf 0.
 - `bm25.get_scores_many(queries) -> float64[n_queries, corpus_size]` and `top_n_many(queries, n)`. GIL released, threaded. Each row matches the single-query call.
-- `LiveIndex(variant="okapi"|"l"|"plus", k1=, b=, epsilon=, delta=, compat=, tokenizer=, fixes=)`. `add(id, text_or_tokens, metadata=)`, `delete(id)`, `update(id, text, metadata=None keeps metadata)`. `get_scores` matches the static class on `corpus()`. `search(query, k=, where=)` filters metadata (`$eq $ne $in $nin $gt $gte $lt $lte $exists`, or a callable that must not re-enter the index). Thread-safe.
+- `LiveIndex(variant="okapi"|"l"|"plus", k1=, b=, epsilon=, delta=, compat=, tokenizer=, fixes=True)`. `fixes=False` opts back into bit-exact rank_bm25 bugs. `add(id, text_or_tokens, metadata=)`, `delete(id)`, `update(id, text, metadata=None keeps metadata)`. `get_scores` matches the static class on `corpus()` with the same `fixes`. `search(query, k=, where=)` filters metadata (`$eq $ne $in $nin $gt $gte $lt $lte $exists`, or a callable that must not re-enter the index). Thread-safe. `bm25_index_path` uses a LiveIndex, so fixes default on.
 - `Tokenizer(lowercase=True, stopwords="english"|list|None, stemmer="english"|other Snowball language|None, cjk=False)`. Opt-in. `cjk=True` emits overlapping CJK bigrams. Not used unless passed as `tokenizer=`.
-- `fuse(rankings, method="rrf"|"weighted", k=60, weights=None) -> list[(id, score)]`. RRF ignores input scores. Weighted min-max normalizes each list.
+- `fuse(rankings, method="rrf"|"weighted", k=60, weights=None) -> list[(id, score)]`. `k=60` is the RRF default. RRF ignores input scores. Weighted min-max normalizes each list.
 - `rapidbm25.integrations.langchain.BM25Retriever.from_texts/from_documents` (extra `langchain`, package langchain-core). `invoke`, `save(dir)`, `load(dir)`.
 - `rapidbm25.integrations.llama_index.BM25Retriever` (extra `llama-index`, package llama-index-core). `_retrieve`, `save`, `load`.
 

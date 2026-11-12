@@ -14,8 +14,9 @@ or `python -m rapidbm25.mcp_server`). Pure Python on top of the Rust core; no MC
 Nothing leaves the machine. Text indexes live in memory. A folder index is also written
 under `RAPIDBM25_CACHE` (default `~/.cache/rapidbm25`). The next `bm25_index_path` for the
 same folder, glob, and parameters loads that cache and reindexes only files whose size
-or mtime changed; removed files lose their chunks. The tool result includes `chunks`,
-`files_reindexed`, and `from_cache`.
+or mtime changed; removed files lose their chunks. The folder index is a `LiveIndex`,
+so `fixes=True` (query-token dedupe and the exact-zero Okapi idf floor). The tool
+result includes `chunks`, `files_reindexed`, and `from_cache`.
 
 Client config:
 

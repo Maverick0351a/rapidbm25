@@ -30,7 +30,12 @@ Open the reported line range to read the hit.
   same scores bit for bit; `bm25.top_n(tokens, n)` gives fast (ids, scores).
 - `bm25.save(path)` / `BM25Okapi.load(path)` round-trip scores. `LiveIndex` adds, deletes,
   and updates documents by string id without a full rebuild (`get_scores` matches a
-  static rebuild). `get_scores_many` batches queries on a thread pool.
+  static rebuild with the same `fixes`). It defaults to `fixes=True`; the compat
+  classes stay bit-exact unless you pass `fixes=True`. `get_scores_many` batches queries.
 - `Tokenizer(...)` (lowercase, stopwords, Snowball stemmer, CJK bigrams) is opt-in.
 - `fuse([bm25_hits, vector_hits], method="rrf")` mixes BM25 with any other ranking.
-- `fixes=True` opts into three rank_bm25 bugfixes; the default stays bit-exact.
+  The RRF constant defaults to `k=60`.
+- `fixes=True` dedupes repeated query tokens, allows an empty corpus, and floors an
+  Okapi idf that is exactly 0 when `epsilon * average_idf` is positive. The IDF
+  formula does not change. On two documents that floor is not positive, so a term
+  in one document still scores 0.

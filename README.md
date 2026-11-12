@@ -66,7 +66,7 @@ BM25L([d.split(" ") for d in docs], compat="47aa3dd")
 | `tokenizer=` | runs in a multiprocessing pool | runs in-process |
 | `compat=` keyword on BM25L / BM25Plus | n/a | `"0.2.2"` (default) or `"47aa3dd"` |
 | Pickling / `save` / `load` | pickle only | pickle, plus a versioned file (`mmap=True` by default) |
-| `fixes=True` | n/a | opt-in for rank_bm25 #19, #36, #39; default stays bit-exact |
+| `fixes=` | n/a | compat classes default `False` (bit-exact). `LiveIndex` defaults `True` |
 
 ## Save, load, and pickle
 
@@ -90,6 +90,9 @@ stable string ids, updates `N`, document frequency, `avgdl`, and idf on every `a
 order is insertion order; `update` keeps a document's place; `delete` closes the gap.
 `get_scores` matches `BM25Okapi` / `BM25L` / `BM25Plus` built on `live.corpus()` with the
 same `k1`, `b`, `epsilon` or `delta`, `compat`, and `fixes`. An empty live index is valid.
+`fixes` defaults to `True` on `LiveIndex` and to `False` on the compat classes. Pass
+`fixes=False` for rank_bm25's exact bugs as well as its formulas. The folder index used
+by `bm25_index_path` is a `LiveIndex`, so it uses that default.
 
 ```python
 from rapidbm25 import LiveIndex, Tokenizer, fuse
@@ -129,23 +132,28 @@ GIL and score queries on a thread pool. Row `i` is bit-identical to the single-q
 
 ## fixes=True
 
-`fixes=False` is the default and matches rank_bm25, bugs included.
+On `BM25Okapi`, `BM25L`, and `BM25Plus`, `fixes=False` is the default and matches
+rank_bm25, bugs included. `LiveIndex` defaults to `fixes=True`. The Okapi IDF formula
+stays `ln(N - df + 0.5) - ln(df + 0.5)` either way. There is no smoothed replacement.
 
-| issue | default | `fixes=True` |
+| issue | `fixes=False` | `fixes=True` |
 |---|---|---|
 | #19 repeated query tokens | each repeat adds the term again | the term is counted once, first-seen order |
-| #36 empty corpus | `ZeroDivisionError` | empty static index, `get_scores` returns shape `(0,)` |
-| #39 idf at 50% df | Okapi idf is exactly 0 | that idf uses the existing `epsilon * average_idf` floor when the floor is positive |
+| #36 empty corpus | `ZeroDivisionError` on the compat classes | empty static index, `get_scores` returns shape `(0,)` |
+| #39 idf exactly 0 | Okapi idf is 0 when a term is in exactly half the documents | that idf uses the existing `epsilon * average_idf` floor when the floor is positive |
 
-#39 does not change any other idf, and it does not apply when the floor is zero or
-negative (a 2-document corpus). It is Okapi-only. L and Plus idf never hit exactly 0
-for a real document frequency.
+#39 does not change any other idf. It does not apply when `epsilon * average_idf` is
+zero or negative. That is the usual 2-document case: each term that appears in one
+document is in half the corpus, the average idf is not positive, and the term still
+scores 0. `BM25L` and `BM25Plus` do not have this zero. The fix is Okapi-only. L and
+Plus idf never hit exactly 0 for a real document frequency.
 
 ## Hybrid fusion
 
 `fuse(rankings, method="rrf", k=60)` is reciprocal rank fusion: `weight / (k + rank)`,
-ranks starting at 1. Input scores are ignored, so a BM25 list and a vector-store list
-do not need a shared scale. `method="weighted"` min-max normalizes each list to `[0, 1]`
+ranks starting at 1. `k=60` is the default (the usual Cormack constant). Input scores
+are ignored, so a BM25 list and a vector-store list do not need a shared scale.
+`method="weighted"` min-max normalizes each list to `[0, 1]`
 and returns the weighted sum. A list of equal positive scores contributes its weight;
 a list of zeros contributes nothing.
 

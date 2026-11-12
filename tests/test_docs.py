@@ -1,4 +1,5 @@
 """Docs stay true: README examples run, and version / MCP name metadata agree."""
+import importlib.util
 import json
 import re
 import sys
@@ -14,12 +15,27 @@ def _python_blocks():
     return re.findall(r"```python\n(.*?)```", README, re.S)
 
 
+def _skip_optional_example(code: str) -> bool:
+    # Optional extras are documented as runnable Python, and skipped when the
+    # dependency is not installed (wheel CI does not install them).
+    optional = (
+        ("rapidbm25.integrations.langchain", "langchain_core"),
+        ("rapidbm25.integrations.llama_index", "llama_index"),
+    )
+    return any(needle in code and importlib.util.find_spec(mod) is None for needle, mod in optional)
+
+
 def test_readme_examples_run():
     blocks = _python_blocks()
     assert len(blocks) >= 2
     ns = {}
+    ran = 0
     for code in blocks:
+        if _skip_optional_example(code):
+            continue
         exec(compile(code, "README.md", "exec"), ns)
+        ran += 1
+    assert ran >= 2
     assert ns["top"] == ["It is quite windy in London"]
     assert list(ns["ids"])[0] == 1 and len(ns["ids"]) == 2
     assert ns["scores"].dtype.name == "float64" and ns["scores"].shape == (3,)

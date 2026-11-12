@@ -96,6 +96,27 @@ def test_fixes_empty_corpus():
     assert b.corpus_size == 0
 
 
+def test_live_defaults_to_fixes_and_two_doc_idf_stays_zero():
+    assert BM25Okapi([["a"], ["b"]]).fixes is False
+    live = LiveIndex()
+    assert live.fixes is True
+    live.add("a", ["windy", "london"])
+    live.add("b", ["sunny", "paris"])
+    # N=2: each of these terms is in exactly half the documents, and the
+    # epsilon floor is not positive, so fixes leave the original idf of 0.
+    plain = BM25Okapi(live.corpus())
+    fixed = BM25Okapi(live.corpus(), fixes=True)
+    assert plain.idf["windy"] == 0.0
+    assert fixed.idf["windy"] == 0.0
+    assert plain.epsilon * plain.average_idf <= 0.0
+    assert bits_equal(live.get_scores(["windy", "london"]), fixed.get_scores(["windy", "london"]))
+    exact = LiveIndex(fixes=False)
+    exact.add("a", ["windy", "windy"])
+    exact.add("b", ["sunny"])
+    exact.add("c", ["other"])
+    assert bits_equal(exact.get_scores(["windy", "windy"]), BM25Okapi(exact.corpus()).get_scores(["windy", "windy"]))
+
+
 def test_fixes_half_document_frequency():
     # rank_bm25 #39: a term in exactly N/2 documents has idf 0.
     corpus = [
@@ -266,6 +287,7 @@ def test_batch_matches_single_and_runs():
 def test_fuse_rrf_and_weighted():
     bm25 = [("a", 3.0), ("b", 1.0), ("c", 0.5)]
     vector = [("b", 0.9), ("d", 0.2)]
+    assert dict(fuse([bm25, vector])) == dict(fuse([bm25, vector], method="rrf", k=60))
     rrf = fuse([bm25, vector], method="rrf", k=60)
     scores = dict(rrf)
     assert scores["b"] == pytest.approx(1 / 62 + 1 / 61)

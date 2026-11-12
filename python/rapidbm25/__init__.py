@@ -58,11 +58,13 @@ def _restore_bm25(cls_name: str, blob: bytes, tokenizer):
 class BM25:
     """Shared base. Subclasses set ``_variant`` and their own defaults.
 
-    ``fixes=False`` (the default) reproduces rank_bm25, including its known
-    bugs. ``fixes=True`` dedupes repeated query tokens (#19), accepts an empty
-    corpus (#36), and gives an Okapi term that occurs in exactly half the
-    documents the same positive epsilon floor as a term that occurs in more
-    than half (#39). See the README.
+    ``fixes=False`` (the default on these classes) reproduces rank_bm25,
+    including its known bugs. ``fixes=True`` dedupes repeated query tokens
+    (#19), accepts an empty corpus (#36), and gives an Okapi term whose idf is
+    exactly 0 the same positive ``epsilon * average_idf`` floor already used
+    for negative idf (#39). The IDF formula itself does not change. On a
+    2-document corpus that floor is not positive, so a term in one of the two
+    documents still has idf 0. :class:`LiveIndex` defaults to ``fixes=True``.
     """
 
     _variant = "okapi"

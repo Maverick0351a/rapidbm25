@@ -13,6 +13,10 @@ rebuild the index themselves. Posting lists are updated per document.
 An empty :class:`LiveIndex` is valid (``corpus_size == 0``). That differs from
 the static classes, which still raise ``ZeroDivisionError`` on an empty corpus
 unless ``fixes=True``.
+
+``fixes`` defaults to ``True`` here and to ``False`` on ``BM25Okapi`` /
+``BM25L`` / ``BM25Plus``. Pass ``fixes=False`` when a live index must reproduce
+rank_bm25's bugs as well as its formulas.
 """
 from __future__ import annotations
 
@@ -182,12 +186,14 @@ class LiveIndex:
     ``"plus"``; ``compat`` is ``"0.2.2"`` (default) or ``"47aa3dd"`` for L and
     Plus. ``delta`` defaults to 0.5 for L and 1 for Plus. ``tokenizer`` is
     applied to string documents and string queries. A list of strings is
-    already tokenized. ``fixes`` has the same meaning as on :class:`BM25Okapi`.
+    already tokenized. ``fixes`` defaults to ``True`` (repeated query tokens
+    counted once, empty corpus allowed, exact-zero Okapi idf floored when that
+    floor is positive). The compat classes default to ``fixes=False``.
     """
 
     def __init__(self, variant: str = "okapi", *, k1: float = 1.5, b: float = 0.75, epsilon: float = 0.25,
                  delta: Optional[float] = None, compat: str = "0.2.2",
-                 tokenizer: Optional[Callable[[str], Sequence[str]]] = None, fixes: bool = False):
+                 tokenizer: Optional[Callable[[str], Sequence[str]]] = None, fixes: bool = True):
         self.variant = variant
         self.compat = compat if variant != "okapi" else "0.2.2"
         if delta is None:
