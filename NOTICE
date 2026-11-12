@@ -18,3 +18,18 @@ rank_bm25 source file is included in this distribution. rank_bm25 is used only
 as a test oracle during development and is not a runtime dependency.
 
 rank_bm25 is not affiliated with or endorsing this project.
+
+Third-party components
+----------------------
+Runtime dependencies are permissive licenses only:
+
+- pyo3, numpy (the Rust crate), rustc-hash, rayon, memmap2, serde, serde_json,
+  unicode-segmentation: MIT OR Apache-2.0 (numpy's Rust crate is BSD-2-Clause).
+- rust-stemmers 1.2 (MIT OR BSD-3-Clause), https://github.com/CurrySoftware/rust-stemmers
+  Snowball stemming algorithms, derived from the Snowball project (BSD-3-Clause).
+  rapidbm25 does not vendor Snowball source.
+
+The optional English stopword list shipped in the tokenizer is a short original
+list of function words, not a copy of the NLTK or Snowball stop lists.
+CJK segmentation is overlapping character bigrams written for this project.
+No AGPL, GPL, BSL, or MPL code is included.

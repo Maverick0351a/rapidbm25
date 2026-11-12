@@ -1,6 +1,6 @@
 # rapidbm25
 
-> Rust-native BM25 (Okapi, L, Plus) for Python. Drop-in for rank_bm25: same API, bit-identical scores, ~1,470x faster get_scores, fast top_n. Includes a stdio MCP server and an agent skill for local keyword search over code and docs. Apache-2.0. No network use.
+> Rust-native BM25 (Okapi, L, Plus) for Python. Drop-in for rank_bm25: same API, bit-identical scores, ~1,470x faster get_scores, fast top_n. Also save/load (mmap), LiveIndex add/delete/update, batch search, optional Snowball/CJK tokenizers, fuse() for hybrid retrieval, LangChain and LlamaIndex retrievers, and a stdio MCP server that caches folder indexes. Apache-2.0. No network use. Permissive deps only.
 
 ## Install
 - `pip install rapidbm25`. Wheels: CPython 3.9-3.15, Linux glibc/musl x86_64+aarch64, macOS x86_64+arm64, Windows x86_64
@@ -12,10 +12,19 @@
 - `bm25.get_top_n(tokens, documents, n=5) -> list` (ties: lower doc id first)
 - `bm25.top_n(tokens, n) -> (ids: int64[], scores: float64[])` (fast partial select)
 - `rapidbm25.top_k_of(scores, k) -> int64[]`
+- `bm25.save(path)` / `BM25Okapi.load(path, mmap=False)` versioned little-endian file; scores bit-identical after round-trip. Pickle works. The default load copies into memory. `mmap=True` maps the caller's file and is unsafe if that file is truncated or written in place (SIGBUS or silent score changes).
+- `fixes=False` is the default on BM25Okapi/BM25L/BM25Plus and is bit-exact, including rank_bm25's IDF formula. `fixes=True` (the LiveIndex default): dedupe repeated query tokens (rank_bm25 #19), allow an empty corpus (#36), floor Okapi idf that is exactly 0 (#39) with `epsilon * average_idf` when that floor is positive. No smoothed IDF. On a 2-document corpus the floor is not positive, so a term in one document still has idf 0.
+- `bm25.get_scores_many(queries) -> float64[n_queries, corpus_size]` and `top_n_many(queries, n)`. GIL released, threaded. Each row matches the single-query call.
+- `LiveIndex(variant="okapi"|"l"|"plus", k1=, b=, epsilon=, delta=, compat=, tokenizer=, fixes=True)`. `fixes=False` opts back into bit-exact rank_bm25 bugs. `add(id, text_or_tokens, metadata=)`, `delete(id)`, `update(id, text, metadata=None keeps metadata)`. `get_scores` matches the static class on `corpus()` with the same `fixes`. `search(query, k=, where=)` filters metadata (`$eq $ne $in $nin $gt $gte $lt $lte $exists`, or a callable that must not re-enter the index). Thread-safe. `bm25_index_path` uses a LiveIndex, so fixes default on.
+- `Tokenizer(lowercase=True, stopwords="english"|list|None, stemmer="english"|other Snowball language|None, cjk=False)`. Opt-in. `cjk=True` emits overlapping CJK bigrams. Not used unless passed as `tokenizer=`.
+- `fuse(rankings, method="rrf"|"weighted", k=60, weights=None) -> list[(id, score)]`. `k=60` is the RRF default. RRF ignores input scores. Weighted min-max normalizes each list.
+- `rapidbm25.integrations.langchain.BM25Retriever.from_texts/from_documents` (extra `langchain`, package langchain-core). `invoke`, `save(dir)`, `load(dir)`.
+- `rapidbm25.integrations.llama_index.BM25Retriever` (extra `llama-index`, package llama-index-core). `_retrieve`, `save`, `load`.
 
 ## MCP server
 - Command: `rapidbm25-mcp` (stdio). Env: `RAPIDBM25_ROOTS` limits which folders can be indexed.
-- Tools: `bm25_index_texts(index, documents, ids?, variant?, k1?, b?)`, `bm25_index_path(index, path, glob?, chunk_lines?, overlap?)`, `bm25_search(index, query, k?)`, `bm25_list_indexes()`, `bm25_drop_index(index)`
+- Tools: `bm25_index_texts(index, documents, ids?, variant?, k1?, b?)`, `bm25_index_path(index, path, glob?, chunk_lines?, overlap?)` (disk cache, reindexes only size/mtime changes; returns chunks, files_reindexed, from_cache), `bm25_search(index, query, k?)`, `bm25_list_indexes()`, `bm25_drop_index(index)`
+- Env: `RAPIDBM25_ROOTS` (read allowlist). Symlinks are not followed; hardlinks (nlink>1) and dotfiles are skipped unless the glob filename starts with `.`. `RAPIDBM25_CACHE` is the folder-index cache (default ~/.cache/rapidbm25, mode 0700/0600). Cache identity is size + mtime + sha256 of the bytes read, re-stat'ed after the read.
 
 ## Agent skill
 - `skill/rapidbm25-search/SKILL.md`; run `python scripts/bm25_search.py --path DIR --query "terms" -k 10 [--glob "*.py"] [--json]`

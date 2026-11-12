@@ -1,8 +1,10 @@
 """rapidbm25 MCP server (stdio, JSON-RPC 2.0, no dependencies beyond rapidbm25).
 
 Run:  rapidbm25-mcp          (or: python -m rapidbm25.mcp_server)
-Indexes live in memory for the life of the process. Path indexing is limited
-to RAPIDBM25_ROOTS (os.pathsep-separated; default: the working directory).
+Text indexes live in memory for the life of the process. Folder indexes are
+cached under RAPIDBM25_CACHE (default: ~/.cache/rapidbm25) and only files
+whose size or mtime changed are reindexed. Path indexing is limited to
+RAPIDBM25_ROOTS (os.pathsep-separated; default: the working directory).
 """
 from __future__ import annotations
 
@@ -11,7 +13,7 @@ import sys
 import traceback
 
 from . import __version__
-from .textindex import VARIANTS, TextIndex, chunk_path
+from .textindex import VARIANTS, TextIndex, index_folder
 
 PROTOCOL = "2025-06-18"
 INDEXES: dict[str, TextIndex] = {}
@@ -30,7 +32,7 @@ TOOLS = [
          **_params}},
      "annotations": {"readOnlyHint": False, "destructiveHint": False, "openWorldHint": False}},
     {"name": "bm25_index_path",
-     "description": "Index text files under a local directory (or one file) as line-window chunks, for keyword search over a codebase or docs.",
+     "description": "Index text files under a local directory (or one file) as line-window chunks. The folder index is cached on disk; only files that changed are reindexed.",
      "inputSchema": {"type": "object", "required": ["index", "path"], "properties": {
          "index": {"type": "string"}, "path": {"type": "string"},
          "glob": {"type": "string", "default": "*", "description": "filename pattern, e.g. *.py"},
@@ -66,13 +68,15 @@ def call_tool(name: str, a: dict):
         INDEXES[a["index"]] = TextIndex(ids, docs, variant, p)
         return {"index": a["index"], "documents": len(docs)}
     if name == "bm25_index_path":
-        ids, texts = chunk_path(a["path"], a.get("glob", "*"), int(a.get("chunk_lines", 40)),
-                                int(a.get("overlap", 10)))
-        if not texts:
-            raise ValueError("no text chunks found")
         variant, p = _build_params(a)
-        INDEXES[a["index"]] = TextIndex(ids, texts, variant, p)
-        return {"index": a["index"], "chunks": len(texts)}
+        ix = index_folder(a["path"], a.get("glob", "*"), int(a.get("chunk_lines", 40)),
+                          int(a.get("overlap", 10)), variant, p)
+        if ix.live.corpus_size == 0:
+            raise ValueError("no text chunks found")
+        INDEXES[a["index"]] = ix
+        return {"index": a["index"], "chunks": ix.live.corpus_size,
+                "files_reindexed": ix.last_stats.get("files_reindexed", 0),
+                "from_cache": bool(ix.last_stats.get("from_cache"))}
     if name == "bm25_search":
         idx = INDEXES.get(a["index"])
         if idx is None:

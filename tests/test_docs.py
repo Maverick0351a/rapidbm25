@@ -1,4 +1,5 @@
 """Docs stay true: README examples run, and version / MCP name metadata agree."""
+import importlib.util
 import json
 import re
 import sys
@@ -14,12 +15,27 @@ def _python_blocks():
     return re.findall(r"```python\n(.*?)```", README, re.S)
 
 
+def _skip_optional_example(code: str) -> bool:
+    # Optional extras are documented as runnable Python, and skipped when the
+    # dependency is not installed (wheel CI does not install them).
+    optional = (
+        ("rapidbm25.integrations.langchain", "langchain_core"),
+        ("rapidbm25.integrations.llama_index", "llama_index"),
+    )
+    return any(needle in code and importlib.util.find_spec(mod) is None for needle, mod in optional)
+
+
 def test_readme_examples_run():
     blocks = _python_blocks()
     assert len(blocks) >= 2
     ns = {}
+    ran = 0
     for code in blocks:
+        if _skip_optional_example(code):
+            continue
         exec(compile(code, "README.md", "exec"), ns)
+        ran += 1
+    assert ran >= 2
     assert ns["top"] == ["It is quite windy in London"]
     assert list(ns["ids"])[0] == 1 and len(ns["ids"]) == 2
     assert ns["scores"].dtype.name == "float64" and ns["scores"].shape == (3,)
@@ -52,7 +68,21 @@ def test_versions_and_names_agree():
     assert all(p["version"] == version and p["identifier"] == "rapidbm25" for p in server["packages"])
     assert f"<!-- mcp-name: {server['name']} -->" in README
     assert len(server["description"]) <= 100
-    assert f"## {version}" in (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    assert f"## Unreleased {version}" in changelog or f"## {version}" in changelog
+
+
+def test_v02_docs_mention_features():
+    llms = (ROOT / "llms.txt").read_text(encoding="utf-8")
+    skill = (ROOT / "skill/rapidbm25-search/SKILL.md").read_text(encoding="utf-8")
+    changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    for name in ("LiveIndex", "fuse", "fixes", "save", "get_scores_many", "Tokenizer"):
+        assert name in README
+        assert name in llms
+    assert "RAPIDBM25_CACHE" in README
+    assert "Unreleased 0.2.0" in changelog
+    assert "LiveIndex" in skill and "fixes=True" in skill
+    assert "RAPIDBM25_CACHE" in (ROOT / "mcp/README.md").read_text(encoding="utf-8")
 
 
 def test_mcp_tool_names_documented():
