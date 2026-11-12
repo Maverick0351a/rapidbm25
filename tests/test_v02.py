@@ -232,14 +232,21 @@ def test_live_filter_runs_outside_the_lock():
     seen = {}
 
     def observe(_meta):
-        # These take the index lock. They must not deadlock with search.
+        # A read that does not take the index lock is safe from the filter.
         seen["n"] = live.corpus_size
-        seen["score"] = float(live.get_scores(["a"])[0])
         return True
 
     hits = live.search(["a"], where=observe)
     assert [h["id"] for h in hits] == ["a"]
     assert seen["n"] == 1
+
+    def mutate(_meta):
+        live.add("b", ["b"])
+        return True
+
+    with pytest.raises(RuntimeError):
+        live.search(["a"], where=mutate)
+    assert live.ids() == ["a"]
 
 
 # ----- tokenizers and batch -------------------------------------------------

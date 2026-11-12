@@ -637,6 +637,44 @@ fn load_static_mapped(mmap: Mmap) -> PyResult<Index> {
     })
 }
 
+fn open_exclusive_temp(tmp: &Path) -> PyResult<File> {
+    let open = |path: &Path| -> std::io::Result<File> {
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            // Do not follow a symlink planted at the temp name.
+            opts.custom_flags(libc::O_NOFOLLOW);
+            opts.mode(0o600);
+        }
+        opts.open(path)
+    };
+    match open(tmp) {
+        Ok(file) => Ok(file),
+        Err(err) => {
+            let symlink = err.kind() == std::io::ErrorKind::AlreadyExists
+                || err.raw_os_error() == Some(libc_eloop());
+            if symlink && std::fs::remove_file(tmp).is_ok() {
+                // remove_file unlinks a symlink. It does not write the target.
+                return open(tmp).map_err(|e| PyValueError::new_err(e.to_string()));
+            }
+            Err(PyValueError::new_err(err.to_string()))
+        }
+    }
+}
+
+fn libc_eloop() -> i32 {
+    #[cfg(unix)]
+    {
+        libc::ELOOP
+    }
+    #[cfg(not(unix))]
+    {
+        -1
+    }
+}
+
 pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> PyResult<()> {
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
@@ -645,7 +683,7 @@ pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> PyResult<()> {
     }
     let tmp = path.with_extension("rbm25.tmp");
     {
-        let mut f = File::create(&tmp).map_err(|e| PyValueError::new_err(e.to_string()))?;
+        let mut f = open_exclusive_temp(&tmp)?;
         f.write_all(bytes).map_err(|e| PyValueError::new_err(e.to_string()))?;
         f.sync_all().ok();
     }

@@ -65,7 +65,7 @@ BM25L([d.split(" ") for d in docs], compat="47aa3dd")
 | Editing `.idf` / `.doc_freqs` after build | changes later scores | no effect (scores come from the native index) |
 | `tokenizer=` | runs in a multiprocessing pool | runs in-process |
 | `compat=` keyword on BM25L / BM25Plus | n/a | `"0.2.2"` (default) or `"47aa3dd"` |
-| Pickling / `save` / `load` | pickle only | pickle, plus a versioned file (`mmap=True` by default) |
+| Pickling / `save` / `load` | pickle only | pickle, plus a versioned file (load copies; `mmap=True` is opt-in) |
 | `fixes=` | n/a | compat classes default `False` (bit-exact). `LiveIndex` defaults `True` |
 
 ## Save, load, and pickle

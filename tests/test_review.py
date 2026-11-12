@@ -245,6 +245,43 @@ def test_get_batch_scores_matches_rank_bm25_on_bad_ids():
     assert ours.get_batch_scores(["a"], [1, 0]) == ref.get_batch_scores(["a"], [1, 0])
 
 
+def test_search_terms_finds_zero_score_match_past_the_window():
+    docs = ["common"] * 60 + ["common windy"] * 60
+    live = LiveIndex()
+    for i, text in enumerate(docs):
+        live.add(str(i), text)
+    assert float(live.idf()["windy"]) == 0.0
+    hits = live.search_terms("windy", k=1)
+    assert hits and hits[0]["text"] == "common windy"
+    assert len(live.search_terms("windy", k=3)) == 3
+    pytest.importorskip("langchain_core")
+    from rapidbm25.integrations.langchain import BM25Retriever
+    found = BM25Retriever.from_texts(docs, k=1).invoke("windy")
+    assert found[0].page_content == "common windy"
+
+
+def test_save_does_not_follow_temp_symlink(tmp_path: Path):
+    victim = tmp_path / "victim"
+    victim.write_text("VICTIM-DATA-KEEP")
+    dest = tmp_path / "index.rbm25"
+    try:
+        dest.with_suffix(".rbm25.tmp").symlink_to(victim)
+    except OSError:
+        pytest.skip("symlinks are not available")
+    # with_suffix replaces the extension: index.rbm25 -> index.rbm25.tmp is
+    # Path.with_extension("rbm25.tmp") == index.rbm25.tmp. Match the writer.
+    planted = dest.with_name("index.rbm25.tmp")
+    if not planted.exists():
+        planted.unlink(missing_ok=True)
+        planted.symlink_to(victim)
+    live = LiveIndex(fixes=False)
+    live.add("a", ["hello"])
+    live.save(dest)
+    assert victim.read_text() == "VICTIM-DATA-KEEP"
+    assert dest.is_file() and not dest.is_symlink()
+    assert LiveIndex.load(dest).ids() == ["a"]
+
+
 def test_halfwidth_katakana_is_bigrammed_and_package_is_typed():
     tok = Tokenizer(cjk=True, lowercase=False)
     assert tok("ｶﾀｶﾅ") == ["ｶﾀ", "ﾀｶ", "ｶﾅ"]

@@ -41,7 +41,7 @@ class TextIndex:
         qs = set(q)
         # over-fetch, then drop docs that share no query term (tiny corpora can
         # give Okapi idf <= 0, and L/Plus give every doc a delta floor)
-        ids, scores = self.bm25.top_n(q, min(len(self.ids), max(k * 4, k + 50)))
+        ids, scores = self.bm25.top_n(q, len(self.ids))
         out = []
         for i, s in zip(ids.tolist(), scores.tolist()):
             if len(out) >= k:
@@ -347,7 +347,7 @@ class PathIndex:
         n = self.live.corpus_size
         if n == 0:
             return []
-        raw = self.live.search(q, k=min(n, max(k * 4, k + 50)))
+        raw = self.live.search(q, k=n)
         out = []
         for hit in raw:
             if len(out) >= k:

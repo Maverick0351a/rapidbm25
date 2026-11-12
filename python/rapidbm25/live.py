@@ -186,9 +186,9 @@ class _Guard:
         self.owner = owner
 
     def __enter__(self):
-        if getattr(self.owner._tls, "depth", 0):
+        if getattr(self.owner._tls, "depth", 0) or getattr(self.owner._tls, "in_search_callback", False):
             raise RuntimeError(
-                "LiveIndex methods cannot be re-entered (do not modify or query the index from a metadata filter)"
+                "LiveIndex methods cannot be re-entered (do not modify or query this index from its metadata filter)"
             )
         self.owner._lock.acquire()
         self.owner._tls.depth = 1
@@ -341,10 +341,19 @@ class LiveIndex:
         """Top-k hits as dicts: ``rank``, ``id``, ``score``, ``text``, ``metadata``.
 
         ``where`` filters metadata before ranking (see module docs). The
-        callable runs without the index lock held, so it may query another
-        index. Scores are the raw BM25 values, not rounded.
+        callable runs without the index lock held, so it may query a different
+        index. Calling back into this index raises ``RuntimeError`` before the
+        index changes. Scores are the raw BM25 values, not rounded.
         """
-        tokens = self._prepare_query(query)
+        if getattr(self._tls, "in_search_callback", False):
+            raise RuntimeError(
+                "LiveIndex methods cannot be re-entered (do not modify or query this index from its metadata filter)"
+            )
+        self._tls.in_search_callback = True
+        try:
+            tokens = self._prepare_query(query)
+        finally:
+            self._tls.in_search_callback = False
         rows = None
         for _ in range(64):
             with self._guard():
@@ -353,7 +362,11 @@ class LiveIndex:
                 metas = None if where is None else [json.loads(m) if m else {} for m in self._native.metas()]
             if n == 0 or k <= 0:
                 return []
-            mask = None if metas is None else [_match(m, where) for m in metas]
+            self._tls.in_search_callback = True
+            try:
+                mask = None if metas is None else [_match(m, where) for m in metas]
+            finally:
+                self._tls.in_search_callback = False
             with self._guard():
                 if self._gen != gen:
                     continue
@@ -375,9 +388,11 @@ class LiveIndex:
     def search_terms(self, query: str, k: int = 10) -> list[dict]:
         """Like :meth:`search`, dropping documents that share no query term.
 
-        Same over-fetch as :class:`rapidbm25.textindex.TextIndex`. A 2-document
-        Okapi index scores every term 0, so rank alone would return the first
-        document even when it does not contain the query.
+        Every document is ranked, then hits that share no query term are
+        dropped. A short over-fetch is not enough: when every score is 0 the
+        top of that window is the lowest ids, and a match past ``k + 50``
+        would be missed. A 2-document Okapi index is the small case of the
+        same tie.
         """
         def terms_of(text: str) -> set:
             if self.tokenizer is not None:
@@ -388,7 +403,9 @@ class LiveIndex:
         if not qterms or k <= 0:
             return []
         n = self.corpus_size
-        raw = self.search(query, k=min(n, max(k * 4, k + 50)))
+        if n == 0:
+            return []
+        raw = self.search(query, k=n)
         out = []
         for hit in raw:
             if qterms.isdisjoint(terms_of(hit["text"])):

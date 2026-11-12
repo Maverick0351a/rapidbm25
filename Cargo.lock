@@ -240,6 +240,7 @@ dependencies = [
 name = "rapidbm25"
 version = "0.2.0"
 dependencies = [
+ "libc",
  "memmap2",
  "numpy",
  "pyo3",
