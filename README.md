@@ -6,7 +6,8 @@
 
 Drop-in, Rust-native replacement for `rank_bm25`'s `BM25Okapi`, `BM25L`, and `BM25Plus`.
 Same constructor, same attributes, **bit-for-bit identical scores**, about 1,470× faster
-`get_scores`, plus a fast `top_n`, a ready-to-run MCP server, and an agent skill.
+`get_scores`, plus a fast `top_n`, save/load, an incremental index, batch search,
+optional tokenizers, hybrid fusion, a ready-to-run MCP server, and an agent skill.
 
 ## Install
 
@@ -64,7 +65,109 @@ BM25L([d.split(" ") for d in docs], compat="47aa3dd")
 | Editing `.idf` / `.doc_freqs` after build | changes later scores | no effect (scores come from the native index) |
 | `tokenizer=` | runs in a multiprocessing pool | runs in-process |
 | `compat=` keyword on BM25L / BM25Plus | n/a | `"0.2.2"` (default) or `"47aa3dd"` |
-| Pickling | yes | not yet |
+| Pickling / `save` / `load` | pickle only | pickle, plus a versioned file (`mmap=True` by default) |
+| `fixes=True` | n/a | opt-in for rank_bm25 #19, #36, #39; default stays bit-exact |
+
+## Save, load, and pickle
+
+```python
+okapi_ix = BM25Okapi([d.split(" ") for d in docs])
+okapi_ix.save("/tmp/rapidbm25-okapi.rbm25")
+okapi_loaded = BM25Okapi.load("/tmp/rapidbm25-okapi.rbm25")   # mmap=True on 64-bit little-endian
+```
+
+`save` writes format 1: magic `RBM25`, a JSON header, then little-endian numeric columns.
+Floats are stored as raw IEEE-754 bits, so `get_scores` after `load` matches the index that
+was saved, bit for bit. `load(mmap=False)` copies the columns instead. Do not overwrite a
+file that a mapped index still has open. Pickle keeps a picklable `tokenizer`; the file
+format stores the tokens already in the index, not an arbitrary callable.
+
+## Live index
+
+`LiveIndex` is a new class (the compat classes stay immutable and bit-exact). It assigns
+stable string ids, updates `N`, document frequency, `avgdl`, and idf on every `add`,
+`delete`, and `update`, and patches posting lists instead of rebuilding them. Score-vector
+order is insertion order; `update` keeps a document's place; `delete` closes the gap.
+`get_scores` matches `BM25Okapi` / `BM25L` / `BM25Plus` built on `live.corpus()` with the
+same `k1`, `b`, `epsilon` or `delta`, `compat`, and `fixes`. An empty live index is valid.
+
+```python
+from rapidbm25 import LiveIndex, Tokenizer, fuse
+words = Tokenizer(lowercase=True, stopwords="english", stemmer="english")
+live_ix = LiveIndex(tokenizer=words)
+live_ix.add("dogs", "The running dogs chased the ball")
+live_ix.add("cats", "A sleeping cat", metadata={"kind": "pet"})
+live_ix.add("weather", "It is quite windy in London")
+pet_hits = live_ix.search("sleeping cats", k=1, where={"kind": "pet"})
+live_ix.save("/tmp/rapidbm25-live.rbm25")
+reloaded = LiveIndex.load("/tmp/rapidbm25-live.rbm25")
+batch_scores = reloaded.get_scores_many(["dogs", "london wind"])
+fused = fuse([["dogs", "cats"], [("cats", 0.9), ("weather", 0.2)]], method="rrf")
+```
+
+`where` is a dict (`$eq`, `$ne`, `$in`, `$nin`, `$gt`, `$gte`, `$lt`, `$lte`, `$exists`)
+or a callable. The callable must not call back into the index. `search` / `add` /
+`delete` / `update` take a lock, so several threads can share one `LiveIndex`.
+
+`variant` is `"okapi"` (default), `"l"`, or `"plus"`. `compat` is `"0.2.2"` or
+`"47aa3dd"`, same as the static classes. `delta` defaults to 0.5 for L and 1 for Plus.
+
+## Tokenizers
+
+`Tokenizer` is opt-in. Unicode words (UAX #29), optional lowercase, an original English
+stop list (or your own), a Snowball stemmer (`stemmer="english"` is Porter2; other
+Snowball languages are accepted), and `cjk=True` for overlapping character bigrams over
+Han, Hiragana, Katakana, and Hangul. Passing `tokenizer=` to a compat class is the only
+way it tokenizes; omitting it leaves those classes unchanged.
+
+## Batch search
+
+`get_scores_many(queries)` returns a `(n_queries, corpus_size)` float64 array.
+`top_n_many(queries, n)` returns one `(ids, scores)` pair per query. Both release the
+GIL and score queries on a thread pool. Row `i` is bit-identical to the single-query call.
+`LiveIndex` has the same two methods.
+
+## fixes=True
+
+`fixes=False` is the default and matches rank_bm25, bugs included.
+
+| issue | default | `fixes=True` |
+|---|---|---|
+| #19 repeated query tokens | each repeat adds the term again | the term is counted once, first-seen order |
+| #36 empty corpus | `ZeroDivisionError` | empty static index, `get_scores` returns shape `(0,)` |
+| #39 idf at 50% df | Okapi idf is exactly 0 | that idf uses the existing `epsilon * average_idf` floor when the floor is positive |
+
+#39 does not change any other idf, and it does not apply when the floor is zero or
+negative (a 2-document corpus). It is Okapi-only. L and Plus idf never hit exactly 0
+for a real document frequency.
+
+## Hybrid fusion
+
+`fuse(rankings, method="rrf", k=60)` is reciprocal rank fusion: `weight / (k + rank)`,
+ranks starting at 1. Input scores are ignored, so a BM25 list and a vector-store list
+do not need a shared scale. `method="weighted"` min-max normalizes each list to `[0, 1]`
+and returns the weighted sum. A list of equal positive scores contributes its weight;
+a list of zeros contributes nothing.
+
+## Integrations
+
+Optional extras. Both are thin retrievers over `LiveIndex`, with `from_texts`, `k`,
+and `save` / `load`. Tests skip when the dependency is not installed.
+
+```bash
+pip install "rapidbm25[langchain]"      # langchain-core
+pip install "rapidbm25[llama-index]"    # llama-index-core
+```
+
+```python
+from rapidbm25.integrations.langchain import BM25Retriever
+retriever = BM25Retriever.from_texts(["windy London", "sunny Paris"], k=1)
+retriever.invoke("windy")
+```
+
+`BM25Retriever.from_documents` accepts LangChain `Document` objects.
+`rapidbm25.integrations.llama_index.BM25Retriever` implements `_retrieve` and returns
+`NodeWithScore` nodes.
 
 ## Benchmarks
 
@@ -82,7 +185,45 @@ Medians; rapidbm25 rows time 20 batches per process.
 | rapidbm25, `top_n(q, 10)` | 0.124 s | 2.90 ms | **16.4 ms (263×)** |
 
 End to end with `np.lexsort` is dominated by sorting 16,000 scores per query; `top_n` does a
-partial select in Rust and is 3.3× faster. Reproduce:
+partial select in Rust and is 3.3× faster.
+
+### 0.2 save, incremental updates, batch search
+
+`python bench/bench_v02.py`, one process, median of 5 after a warmup. Machine: Intel Xeon,
+4 vCPU, Linux x86_64, CPython 3.12.3, release build. Synthetic corpus unless noted:
+8,000 documents, 48 tokens each, vocabulary 4,000. The saved file is 7,924,566 bytes.
+
+| operation | n | median |
+|---|---:|---:|
+| static `BM25Okapi` build | 8,000 | 10.7 ms |
+| `save` | 8,000 | 15.9 ms |
+| `load(mmap=True)` + one query | 8,000 | 2.01 ms |
+| `load(mmap=False)` + one query | 8,000 | 2.81 ms |
+| `LiveIndex.add` of every document | 8,000 | 85.3 ms |
+| `LiveIndex.delete` | 800 | 6.82 ms |
+| static rebuild of the documents still left | 7,200 | 8.53 ms |
+| `LiveIndex.add` of 200 more, index already built | 200 | 1.57 ms |
+| static rebuild of that whole set | 8,200 | 9.58 ms |
+
+Building 8,000 documents in one `BM25Okapi(...)` call is faster than 8,000 individual
+`add`s. Once the live index exists, adding 200 documents is 1.57 ms against 9.58 ms to
+rebuild all 8,200, and deleting 800 is 6.82 ms against 8.53 ms to rebuild the rest.
+
+Batch search is the same comparison, end to end (`get_scores` in a loop vs `get_scores_many`),
+median of 5:
+
+| workload | sequential | `get_scores_many` | speedup |
+|---|---:|---:|---:|
+| Okapi, 8,000×48, vocab 4,000, 64 queries (short postings) | 0.331 ms | 1.021 ms | 0.32× |
+| Okapi, 30,000×40, vocab 200, 64 queries (long postings) | 4.94 ms | 3.64 ms | 1.36× |
+| BM25Plus, 30,000×32, vocab 4,000, 48 queries (every document is scored) | 7.59 ms | 3.66 ms | 2.08× |
+
+On this 4-vCPU guest the sparse Okapi kernel is cheap enough that the thread pool loses
+when each query only walks short postings. It wins once a query walks long postings, and
+by about 2× for BM25Plus, which adds a term's contribution to every document. Rows match
+the single-query scores bit for bit either way.
+
+Reproduce the 0.1 comparison:
 
 ```bash
 pip install rapidbm25 rank-bm25==0.2.2
@@ -108,8 +249,10 @@ python bench/bench_interleaved.py --workloads /tmp/bm25-wl --out /tmp/bench.json
 
 `rapidbm25-mcp` is a stdio MCP server shipped in the wheel (no MCP SDK dependency):
 `bm25_index_texts`, `bm25_index_path`, `bm25_search`, `bm25_list_indexes`, `bm25_drop_index`.
-Indexes live in memory; nothing leaves the machine. `bm25_index_path` only reads inside
-`RAPIDBM25_ROOTS` (default: the working directory).
+Text indexes live in memory. `bm25_index_path` caches the folder index under
+`RAPIDBM25_CACHE` (default `~/.cache/rapidbm25`) and reindexes only files whose size or
+mtime changed. It only reads inside `RAPIDBM25_ROOTS` (default: the working directory).
+Nothing leaves the machine.
 
 ```json
 { "mcpServers": { "rapidbm25": { "command": "uvx", "args": ["--from", "rapidbm25", "rapidbm25-mcp"],

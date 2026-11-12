@@ -11,7 +11,11 @@ or `python -m rapidbm25.mcp_server`). Pure Python on top of the Rust core; no MC
 | `bm25_list_indexes` / `bm25_drop_index` | Housekeeping |
 
 `bm25_index_path` only reads inside `RAPIDBM25_ROOTS` (default: the working directory).
-Nothing leaves the machine; indexes live in memory for the life of the process.
+Nothing leaves the machine. Text indexes live in memory. A folder index is also written
+under `RAPIDBM25_CACHE` (default `~/.cache/rapidbm25`). The next `bm25_index_path` for the
+same folder, glob, and parameters loads that cache and reindexes only files whose size
+or mtime changed; removed files lose their chunks. The tool result includes `chunks`,
+`files_reindexed`, and `from_cache`.
 
 Client config:
 

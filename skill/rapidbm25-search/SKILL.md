@@ -24,5 +24,13 @@ Open the reported line range to read the hit.
 - Query with the words you expect in the answer, not a question. Identifiers work best.
 - Narrow with `--glob "*.py"`; adjust `--chunk-lines` (default 40) for longer context.
 - For an MCP client, run the bundled server instead: `rapidbm25-mcp`.
+  `bm25_index_path` caches the folder under `RAPIDBM25_CACHE` and only reindexes files
+  whose size or mtime changed.
 - In Python: `from rapidbm25 import BM25Okapi` is a drop-in for `rank_bm25.BM25Okapi`,
   same scores bit for bit; `bm25.top_n(tokens, n)` gives fast (ids, scores).
+- `bm25.save(path)` / `BM25Okapi.load(path)` round-trip scores. `LiveIndex` adds, deletes,
+  and updates documents by string id without a full rebuild (`get_scores` matches a
+  static rebuild). `get_scores_many` batches queries on a thread pool.
+- `Tokenizer(...)` (lowercase, stopwords, Snowball stemmer, CJK bigrams) is opt-in.
+- `fuse([bm25_hits, vector_hits], method="rrf")` mixes BM25 with any other ranking.
+- `fixes=True` opts into three rank_bm25 bugfixes; the default stays bit-exact.

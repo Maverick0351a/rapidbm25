@@ -2,7 +2,7 @@
   "manifest_version": "0.4",
   "name": "rapidbm25",
   "display_name": "rapidbm25 (BM25 keyword search)",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Fast local BM25 keyword search over texts or a code/docs folder. Rust core, no network.",
   "long_description": "Build in-memory BM25 indexes from a list of texts or from the files under a local folder, then run ranked keyword search. Good for exact identifiers, error strings and rare terms. Scoring is bit for bit identical to rank_bm25. Indexes live in memory; nothing leaves the machine; folder indexing is limited to the allowed directories.",
   "author": { "name": "Travis Johnson", "url": "https://github.com/Maverick0351a" },

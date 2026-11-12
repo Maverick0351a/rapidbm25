@@ -8,13 +8,13 @@
     "url": "https://github.com/Maverick0351a/rapidbm25",
     "source": "github"
   },
-  "version": "0.1.0",
+  "version": "0.2.0",
   "packages": [
     {
       "registryType": "pypi",
       "registryBaseUrl": "https://pypi.org",
       "identifier": "rapidbm25",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "runtimeHint": "uvx",
       "transport": {
         "type": "stdio"
@@ -24,6 +24,12 @@
         {
           "name": "RAPIDBM25_ROOTS",
           "description": "Directories bm25_index_path may read (os.pathsep-separated). Default: the working directory.",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "RAPIDBM25_CACHE",
+          "description": "Folder-index cache directory. Default: ~/.cache/rapidbm25.",
           "isRequired": false,
           "isSecret": false
         }

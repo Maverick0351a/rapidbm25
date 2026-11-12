@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "rapidbm25"
-version = "0.1.0"
+version = "0.2.0"
 description = "Drop-in, Rust-native replacement for rank_bm25's BM25Okapi / BM25L / BM25Plus"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -33,6 +33,10 @@ Changelog = "https://github.com/Maverick0351a/rapidbm25/blob/main/CHANGELOG.md"
 
 [project.scripts]
 rapidbm25-mcp = "rapidbm25.mcp_server:main"
+
+[project.optional-dependencies]
+langchain = ["langchain-core>=0.2"]
+llama-index = ["llama-index-core>=0.11"]
 
 [tool.maturin]
 python-source = "python"
