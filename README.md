@@ -311,6 +311,37 @@ Details: [mcp/README.md](mcp/README.md). Registry metadata: [server.json](server
 python skill/rapidbm25-search/scripts/bm25_search.py --path ./src --query "parse_header timeout" -k 10
 ```
 
+## Agent eval
+
+`eval/agent/` asks 20 code-search questions against the urllib3 commit pinned in
+`eval/agent/tasks.json` (release 2.8.0). Each answer is one file and one symbol, checked
+automatically. The harness asks the same model the same prompt twice: once with the
+rapidbm25 MCP tools, once with grep and read-file. It writes `runs.json` and `summary.md`
+(correctness rate and medians) under `eval/agent/out/`.
+
+Dry-run, with a scripted model and no API key:
+
+```bash
+python -m venv .venv && . .venv/bin/activate
+pip install "maturin>=1.7,<2" && maturin develop
+python eval/agent/harness.py --dry-run
+```
+
+Live run, against an https OpenAI-compatible chat completions endpoint
+(`http` is accepted only for `localhost` and `127.0.0.1`):
+
+```bash
+export EVAL_API_KEY=...          # secret; never commit it
+export EVAL_MODEL=...
+export EVAL_BASE_URL=https://api.openai.com/v1   # root that serves /chat/completions
+python eval/agent/harness.py
+```
+
+The GitHub workflow `agent-eval` runs the live comparison only from Actions → Run workflow
+on `main`, and only if the `EVAL_API_KEY` repository secret is set. A dispatch from any
+other ref stops before that secret is loaded. The form supplies the model and base URL.
+Pull requests run the dry-run and do not call a model.
+
 ## Build from source
 
 ```bash
