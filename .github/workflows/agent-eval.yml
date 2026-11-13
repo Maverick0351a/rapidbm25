@@ -1,0 +1,94 @@
+name: agent-eval
+
+# The live comparison calls a model, so it is manual only. It runs when the
+# EVAL_API_KEY secret is set and exits with a message when it is not.
+# Pull requests never run that job. They run the dry-run, which uses a
+# scripted model and needs no key.
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: "Model name, exported as EVAL_MODEL"
+        required: true
+        type: string
+      base_url:
+        description: "OpenAI-compatible API root, exported as EVAL_BASE_URL (for example https://api.openai.com/v1)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agent-eval-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  dry-run:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v7.1.0
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install this checkout
+        run: |
+          python -m venv .venv
+          . .venv/bin/activate
+          python -m pip install -q "maturin>=1.7,<2"
+          maturin develop
+      - name: Dry-run both tool arms
+        run: |
+          . .venv/bin/activate
+          python eval/agent/harness.py --dry-run --out eval/agent/out
+          cat eval/agent/out/summary.md >> "$GITHUB_STEP_SUMMARY"
+
+  live:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Require EVAL_API_KEY
+        env:
+          EVAL_API_KEY: ${{ secrets.EVAL_API_KEY }}
+          EVAL_MODEL: ${{ inputs.model }}
+          EVAL_BASE_URL: ${{ inputs.base_url }}
+        run: |
+          missing=
+          if [ -z "$EVAL_API_KEY" ]; then missing="$missing EVAL_API_KEY"; fi
+          if [ -z "$EVAL_MODEL" ]; then missing="$missing EVAL_MODEL"; fi
+          if [ -z "$EVAL_BASE_URL" ]; then missing="$missing EVAL_BASE_URL"; fi
+          if [ -n "$missing" ]; then
+            echo "Agent eval did not run. Missing:$missing"
+            echo "Add the repository secret EVAL_API_KEY. Pass model and base_url in the workflow form."
+            echo "base_url is the OpenAI-compatible root that serves /chat/completions."
+            echo "This job does not run on pull requests."
+            exit 1
+          fi
+          echo "EVAL_API_KEY is set. Model: $EVAL_MODEL"
+          python3 -c 'import os; from urllib.parse import urlsplit; p = urlsplit(os.environ["EVAL_BASE_URL"]); print("Base URL host: %s://%s" % (p.scheme, p.hostname or ""))'
+      - uses: actions/setup-python@v7.1.0
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install this checkout
+        run: |
+          python -m venv .venv
+          . .venv/bin/activate
+          python -m pip install -q "maturin>=1.7,<2"
+          maturin develop
+      - name: Run the comparison
+        env:
+          EVAL_API_KEY: ${{ secrets.EVAL_API_KEY }}
+          EVAL_MODEL: ${{ inputs.model }}
+          EVAL_BASE_URL: ${{ inputs.base_url }}
+        run: |
+          . .venv/bin/activate
+          python eval/agent/harness.py --out eval/agent/out
+          cat eval/agent/out/summary.md >> "$GITHUB_STEP_SUMMARY"

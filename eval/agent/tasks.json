@@ -1,0 +1,127 @@
+{
+  "repo_url": "https://github.com/urllib3/urllib3.git",
+  "sha": "b1d30ab61fe0db8f11092805e8c5ac43e091064a",
+  "note": "urllib3 2.8.0. Each answer is the only def or class of that name in this commit.",
+  "tasks": [
+    {
+      "id": "connection-dropped",
+      "question": "Which function returns true when an HTTP connection has been dropped and should be closed?",
+      "file": "src/urllib3/util/connection.py",
+      "symbol": "is_connection_dropped"
+    },
+    {
+      "id": "gai-family",
+      "question": "Which function picks the address family passed to getaddrinfo when AF_UNSPEC should search both IPv6 and IPv4 DNS records?",
+      "file": "src/urllib3/util/connection.py",
+      "symbol": "allowed_gai_family"
+    },
+    {
+      "id": "http-tunnel",
+      "question": "Which function returns true when a connection must use HTTP CONNECT through a proxy?",
+      "file": "src/urllib3/util/proxy.py",
+      "symbol": "connection_requires_http_tunnel"
+    },
+    {
+      "id": "make-headers",
+      "question": "Which function is the shortcut that builds request headers such as connection keep-alive and accept-encoding?",
+      "file": "src/urllib3/util/request.py",
+      "symbol": "make_headers"
+    },
+    {
+      "id": "rewind-body",
+      "question": "Which function rewinds a file-like request body to a saved position so a redirect or retry can send it again?",
+      "file": "src/urllib3/util/request.py",
+      "symbol": "rewind_body"
+    },
+    {
+      "id": "body-chunks",
+      "question": "Which function turns a request body into chunks for socket.sendall and decides whether Content-Length or chunked transfer encoding applies?",
+      "file": "src/urllib3/util/request.py",
+      "symbol": "body_to_chunks"
+    },
+    {
+      "id": "fp-closed",
+      "question": "Which function checks whether a file-like object is already closed, including objects that only expose isclosed?",
+      "file": "src/urllib3/util/response.py",
+      "symbol": "is_fp_closed"
+    },
+    {
+      "id": "head-response",
+      "question": "Which function checks whether a response was produced by an HTTP request that used HEAD as its method?",
+      "file": "src/urllib3/util/response.py",
+      "symbol": "is_response_to_head"
+    },
+    {
+      "id": "fingerprint",
+      "question": "Which function checks that a hex fingerprint, optionally written with colons, matches a certificate supplied as bytes?",
+      "file": "src/urllib3/util/ssl_.py",
+      "symbol": "assert_fingerprint"
+    },
+    {
+      "id": "ssl-context",
+      "question": "Which function creates and configures an ssl.SSLContext for urllib3, negotiating the highest protocol both sides support?",
+      "file": "src/urllib3/util/ssl_.py",
+      "symbol": "create_urllib3_context"
+    },
+    {
+      "id": "ip-address",
+      "question": "Which function detects whether a hostname is an IPv4 address or an IPv6 address, including IPv6 addresses with zone IDs?",
+      "file": "src/urllib3/util/ssl_.py",
+      "symbol": "is_ipaddress"
+    },
+    {
+      "id": "match-hostname",
+      "question": "Which function verifies that a decoded peer certificate from getpeercert matches a hostname under the RFC 2818 and RFC 6125 rules?",
+      "file": "src/urllib3/util/ssl_match_hostname.py",
+      "symbol": "match_hostname"
+    },
+    {
+      "id": "ssl-transport",
+      "question": "Which class wraps an existing socket, establishes a TLS connection, and can chain multiple TLS connections for TLS within TLS?",
+      "file": "src/urllib3/util/ssltransport.py",
+      "symbol": "SSLTransport"
+    },
+    {
+      "id": "parse-url",
+      "question": "Which function parses a possibly incomplete URL into a namedtuple of scheme, host, and the other RFC 3986 components?",
+      "file": "src/urllib3/util/url.py",
+      "symbol": "parse_url"
+    },
+    {
+      "id": "lru-container",
+      "question": "Which class is a thread-safe mapping that keeps at most maxsize keys and throws away the least-recently-used keys beyond that?",
+      "file": "src/urllib3/_collections.py",
+      "symbol": "RecentlyUsedContainer"
+    },
+    {
+      "id": "header-dict",
+      "question": "Which class stores HTTP headers so field names compare case-insensitively, as RFC 7230 requires, and can hold multiple values for one field?",
+      "file": "src/urllib3/_collections.py",
+      "symbol": "HTTPHeaderDict"
+    },
+    {
+      "id": "proxy-factory",
+      "question": "Which function builds a ProxyManager from a proxy URL string?",
+      "file": "src/urllib3/poolmanager.py",
+      "symbol": "proxy_from_url"
+    },
+    {
+      "id": "socks-manager",
+      "question": "Which class routes PoolManager connections through a configured SOCKS proxy?",
+      "file": "src/urllib3/contrib/socks.py",
+      "symbol": "SOCKSProxyManager"
+    },
+    {
+      "id": "byte-buffer",
+      "question": "Which class is the memory-efficient buffer that holds decoded response bytes so read can return the exact amount the BufferedIOBase API asks for?",
+      "file": "src/urllib3/response.py",
+      "symbol": "BytesQueueBuffer"
+    },
+    {
+      "id": "max-retry",
+      "question": "Which exception is raised when the maximum number of retries is exceeded for a request?",
+      "file": "src/urllib3/exceptions.py",
+      "symbol": "MaxRetryError"
+    }
+  ]
+}

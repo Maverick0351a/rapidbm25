@@ -13,3 +13,4 @@ venv/
 *.whl
 *.mcpb
 wheelhouse/
+eval/agent/out/
