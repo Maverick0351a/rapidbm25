@@ -13,3 +13,4 @@ venv/
 *.whl
 *.mcpb
 wheelhouse/
+beir-cache/
