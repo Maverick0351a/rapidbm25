@@ -5,16 +5,16 @@ Synthetic corpora use a fixed seed (500, 4,000, and 8,000 documents). Each
 batch time is the median of several runs. Per-query p50 and p99 are one extra
 pass. rank_bm25 has no ``top_n``; that column times ``get_top_n``.
 
-Peak RSS is ``resource.getrusage`` in a fresh process per library, because
-Rust allocations are outside ``tracemalloc``. The rapidbm25 index is also
-saved once and its file size is recorded.
+Index memory is the VmRSS the constructor keeps, measured in a fresh process
+per library, because Rust allocations are outside ``tracemalloc``. The
+rapidbm25 index is also saved once and its file size is recorded.
 
 ``--quality`` scores nDCG@10 and recall@100 on a local BEIR dataset, or on
 every dataset directory under a path. ``bm25s`` is included when installed.
 Nothing is downloaded.
 
     python bench/bench.py --out /tmp/rapidbm25-bench
-    python bench/bench.py --quality /path/to/beir-datasets --out /tmp/rapidbm25-bench
+    python bench/bench.py --sizes '' --quality /path/to/beir-datasets --out /tmp/rapidbm25-bench
 """
 from __future__ import annotations
 
@@ -377,18 +377,6 @@ def score_quality(rank_cls, rapid_cls, dataset):
     }
 
 
-def peak_rss_bytes():
-    try:
-        import resource
-    except ImportError:
-        return None
-    rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    # Linux reports kilobytes. macOS reports bytes.
-    if sys.platform == "darwin":
-        return int(rss)
-    return int(rss) * 1024
-
-
 def current_rss_bytes():
     try:
         with open("/proc/self/status", encoding="utf-8") as handle:
@@ -431,19 +419,14 @@ def run_rss_worker(kind, path, n, doc_len, vocab, seed):
     else:
         docs = read_corpus_file(path)
     gc.collect()
-    # ru_maxrss never falls, so the corpus and the imports are already in it.
-    # The library peak is only how far the index build pushes that mark.
-    before_peak = peak_rss_bytes()
     before = current_rss_bytes()
     index = cls(docs)
-    built_peak = peak_rss_bytes()
     gc.collect()
     after = current_rss_bytes()
-    peak = None if before_peak is None or built_peak is None else max(0, built_peak - before_peak)
     added = None if before is None or after is None else max(0, after - before)
-    payload = {"peak_rss_bytes": peak, "index_rss_bytes": added}
-    if before_peak is None:
-        payload["reason"] = "resource.getrusage is unavailable"
+    payload = {"index_rss_bytes": added}
+    if before is None:
+        payload["reason"] = "VmRSS is unavailable"
     del index
     print(json.dumps(payload))
 
@@ -458,12 +441,12 @@ def measure_rss(kind, corpus_path=None, spec=None):
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=180, check=False)
     if proc.returncode != 0:
         detail = (proc.stderr or proc.stdout or "rss worker failed").strip()
-        return {"peak_rss_bytes": None, "error": detail[-500:]}
+        return {"index_rss_bytes": None, "error": detail[-500:]}
     line = next((ln for ln in reversed(proc.stdout.splitlines()) if ln.startswith("{")), "")
     try:
         return json.loads(line)
     except json.JSONDecodeError:
-        return {"peak_rss_bytes": None, "error": proc.stdout.strip()[-500:] or "rss worker returned no JSON"}
+        return {"index_rss_bytes": None, "error": proc.stdout.strip()[-500:] or "rss worker returned no JSON"}
 
 
 def measure_memory(rapid_mod, docs, label, spec=None):
@@ -486,9 +469,7 @@ def measure_memory(rapid_mod, docs, label, spec=None):
     out = {
         "label": label,
         "docs": len(docs),
-        "note": "peak RSS is the rise in ru_maxrss while the index is built, after the corpus and a collection; added by index is the VmRSS the constructor keeps",
-        "rank_bm25_peak_rss_bytes": rank.get("peak_rss_bytes"),
-        "rapidbm25_peak_rss_bytes": rapid.get("peak_rss_bytes"),
+        "note": "added by index is the VmRSS the constructor keeps after the corpus has been collected",
         "rank_bm25_index_rss_bytes": rank.get("index_rss_bytes"),
         "rapidbm25_index_rss_bytes": rapid.get("index_rss_bytes"),
         "rapidbm25_index_bytes": index_bytes,
@@ -722,10 +703,10 @@ def markdown(payload):
         lines.extend([
             f"Corpus: {memory['label']} ({memory['docs']} docs). {memory['note']}.",
             "",
-            "| impl | peak RSS | added by index | saved index |",
-            "|---|---:|---:|---:|",
-            f"| rank_bm25 | {fmt_bytes(memory.get('rank_bm25_peak_rss_bytes'))} | {fmt_bytes(memory.get('rank_bm25_index_rss_bytes'))} | |",
-            f"| rapidbm25 | {fmt_bytes(memory.get('rapidbm25_peak_rss_bytes'))} | {fmt_bytes(memory.get('rapidbm25_index_rss_bytes'))} | {fmt_bytes(memory.get('rapidbm25_index_bytes'))} |",
+            "| impl | added by index | saved index |",
+            "|---|---:|---:|",
+            f"| rank_bm25 | {fmt_bytes(memory.get('rank_bm25_index_rss_bytes'))} | |",
+            f"| rapidbm25 | {fmt_bytes(memory.get('rapidbm25_index_rss_bytes'))} | {fmt_bytes(memory.get('rapidbm25_index_bytes'))} |",
         ])
     lines.extend([
         "",

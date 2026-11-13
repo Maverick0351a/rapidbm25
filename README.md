@@ -248,7 +248,7 @@ python bench/bench_interleaved.py --workloads /tmp/bm25-wl --out /tmp/bench.json
 
 Fixed-seed synthetic corpora of 500, 4,000, and 8,000 documents. The command times index
 build, `get_scores`, and `top_n` against rank_bm25 0.2.2 (batch median, plus per-query
-p50 and p99), records peak RSS and the saved index size, smoke-tests the MCP server,
+p50 and p99), records the RSS added by the index and the saved index size, smoke-tests the MCP server,
 and writes `bench.json` and `bench.md`. CI runs the 500- and 4,000-document sizes and
 fails if the 4,000-document `get_scores` speedup drops below the floor in `bench/bench.py`.
 
