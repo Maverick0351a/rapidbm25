@@ -294,9 +294,11 @@ def top_doc_ids(scores, doc_ids, k):
     k = min(k, n)
     if k <= 0:
         return []
-    cand = np.argpartition(scores, -k)[-k:]
-    order = sorted((int(i) for i in cand), key=lambda i: (-float(scores[i]), i))
-    return [doc_ids[i] for i in order]
+    # Higher score, then lower index. argpartition's top-k keeps an arbitrary
+    # subset of the documents tied at the cutoff, so a relevant zero would
+    # depend on NumPy's partition.
+    order = np.lexsort((np.arange(n), -scores))[:k]
+    return [doc_ids[int(i)] for i in order]
 
 
 def ndcg_at(ranked, rels, k):
