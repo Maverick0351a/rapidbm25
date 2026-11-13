@@ -68,3 +68,29 @@ def test_tool_arguments_are_validated():
         call_tool("bm25_index_path", {"index": "t", "path": ".", "chunk_lines": 0})
     with pytest.raises(ValueError):
         call_tool("bm25_index_path", {"index": "t", "path": ".", "chunk_lines": 4, "overlap": 4})
+
+
+def test_mcp_rejects_oversize_input():
+    from rapidbm25.mcp_server import _MAX_DOC_BYTES, _MAX_LINE_BYTES, call_tool
+
+    with pytest.raises(ValueError, match=str(_MAX_DOC_BYTES)):
+        call_tool("bm25_index_texts", {"index": "t", "documents": ["x" * (_MAX_DOC_BYTES + 1)]})
+
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "rapidbm25.mcp_server"],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    payload = b"x" * (_MAX_LINE_BYTES + 1) + b'\n{"jsonrpc":"2.0","id":1,"method":"ping"}\n'
+    try:
+        out, err = proc.communicate(payload, timeout=30)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=5)
+    lines = [ln for ln in out.splitlines() if ln.strip()]
+    assert lines, err
+    too_long = json.loads(lines[0])
+    assert too_long["id"] is None
+    assert too_long["error"]["code"] == -32600
+    assert str(_MAX_LINE_BYTES) in too_long["error"]["message"]
+    assert json.loads(lines[1])["result"] == {}
