@@ -59,12 +59,6 @@ REPEATS = 5
 WARMUP = 1
 
 TOKEN_RE = re.compile(r"[A-Za-z0-9]+")
-# PR #3 (still open) is what adds the 1,000,000-byte document cap. Do not
-# assert it, and do not edit the MCP server, until that PR has merged.
-OVERSIZE_SKIP = (
-    "PR #3 is still open. It adds the MCP cap that rejects a document over "
-    "1,000,000 bytes. The oversize assertion is skipped until that PR is merged."
-)
 
 
 def tokenize(text):
@@ -519,9 +513,21 @@ def _mcp_read(proc, timeout):
     return json.loads(line)
 
 
+def _mcp_tool_text(message):
+    result = message.get("result") if isinstance(message, dict) else None
+    if not isinstance(result, dict):
+        return ""
+    content = result.get("content") or []
+    if not content or not isinstance(content[0], dict):
+        return ""
+    return str(content[0].get("text") or "")
+
+
 def mcp_smoke():
     print("mcp smoke", file=sys.stderr)
-    oversize = {"skipped": True, "reason": OVERSIZE_SKIP}
+    from rapidbm25.mcp_server import _MAX_DOC_BYTES
+
+    oversize = {"skipped": False, "passed": False, "limit_bytes": _MAX_DOC_BYTES}
     proc = None
     try:
         t0 = time.perf_counter()
@@ -537,13 +543,25 @@ def mcp_smoke():
         first = _mcp_read(proc, 30)
         first_s = time.perf_counter() - t0
         first_ok = "result" in first and "error" not in first
+        _mcp_send(proc, {
+            "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": {"name": "bm25_index_texts", "arguments": {
+                "index": "oversize", "documents": ["x" * (_MAX_DOC_BYTES + 1)],
+            }},
+        })
+        rejected = _mcp_read(proc, 30)
+        rejected_text = _mcp_tool_text(rejected)
+        rejected_error = isinstance(rejected, dict) and bool((rejected.get("result") or {}).get("isError"))
+        oversize["is_error"] = rejected_error
+        oversize["message"] = rejected_text[:200]
         proc.stdin.write("{not-json\n")
         proc.stdin.flush()
         bad = _mcp_read(proc, 30)
         code = bad.get("error", {}).get("code") if isinstance(bad, dict) else None
-        _mcp_send(proc, {"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
+        _mcp_send(proc, {"jsonrpc": "2.0", "id": 3, "method": "tools/list"})
         again = _mcp_read(proc, 30)
         alive = isinstance(again, dict) and "result" in again and "error" not in again
+        oversize["passed"] = bool(rejected_error and str(_MAX_DOC_BYTES) in rejected_text and alive)
         return {
             "first_response_s": first_s if first_ok else None,
             "first_response_ok": first_ok,
@@ -552,6 +570,7 @@ def mcp_smoke():
             "oversize": oversize,
         }
     except Exception as exc:
+        oversize["error"] = str(exc)
         return {
             "first_response_s": None,
             "first_response_ok": False,
@@ -736,7 +755,15 @@ def markdown(payload):
         "| malformed JSON line | "
         + ("parse error, server still answered" if mcp.get("malformed_json", {}).get("passed") else "failed")
         + " |",
-        f"| oversized document | skipped: {mcp.get('oversize', {}).get('reason', '')} |",
+        "| oversized document | "
+        + (
+            "error, server still answered"
+            if mcp.get("oversize", {}).get("passed")
+            else "skipped: " + str(mcp.get("oversize", {}).get("reason", ""))
+            if mcp.get("oversize", {}).get("skipped")
+            else "failed"
+        )
+        + " |",
         "",
     ])
     gate = payload["gate"]
