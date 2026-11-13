@@ -4,7 +4,7 @@
     bm25 = BM25Okapi([doc.split() for doc in docs])
     bm25.get_scores("windy london".split())  # same float64 scores, bit for bit
     bm25.top_n("windy london".split(), n=10) # fast partial-select top-n (ids, scores)
-    bm25.save("index.rbm25")                 # versioned file; load() memory-maps it
+    bm25.save("index.rbm25")                 # versioned file; load() copies it into memory
 """
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ __all__ = [
     "COMPAT_DEFAULT",
     "__version__",
 ]
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 
 top_k_of = _native.top_k_of
 Tokenizer = _native.Tokenizer
@@ -135,7 +135,9 @@ class BM25:
         return self._index.get_scores_many(list(queries))
 
     def get_batch_scores(self, query: Sequence[str], doc_ids: Sequence[int]) -> list:
-        assert all(di < self.corpus_size for di in doc_ids)
+        # Not `assert`: python -O strips those, and this is the rank_bm25 check.
+        if not all(di < self.corpus_size for di in doc_ids):
+            raise AssertionError
         if len(doc_ids) == 0:
             return []
         # Index with the original ids. Casting to int64 first would turn 1.9 into 1
@@ -151,7 +153,9 @@ class BM25:
         return list(self._index.top_n_many(list(queries), int(n)))
 
     def get_top_n(self, query: Sequence[str], documents: Sequence[Any], n: int = 5) -> list:
-        assert self.corpus_size == len(documents), "The documents given don't match the index corpus!"
+        # Not `assert`: python -O strips those, and this is the rank_bm25 check.
+        if self.corpus_size != len(documents):
+            raise AssertionError("The documents given don't match the index corpus!")
         ids, _ = self._index.top_k(query, int(n))
         return [documents[i] for i in ids.tolist()]
 

@@ -16,8 +16,8 @@ pip install rapidbm25
 ```
 
 Prebuilt wheels: CPython 3.9–3.15 on Linux (manylinux_2_28 and musllinux_1_2, x86_64 and aarch64),
-macOS (x86_64 10.13+, arm64 11.0+), and Windows (x86_64). Other platforms build from the sdist
-and need a Rust toolchain (1.85+).
+macOS (x86_64 10.13+ for CPython 3.9–3.13 and 10.15+ for 3.14–3.15, arm64 11.0+), and Windows
+(x86_64). Other platforms build from the sdist and need a Rust toolchain (1.85+).
 
 ## Use
 

@@ -20,3 +20,14 @@ Rules for changes:
 - Performance claims need a run of `bench/bench_interleaved.py` with machine details.
 
 By contributing you agree that your contributions are licensed under Apache-2.0.
+
+## Release
+
+0.2.0 is on PyPI. Ship the next version by tagging, not by pasting a token:
+
+1. Keep the version identical in `pyproject.toml`, `Cargo.toml`, `python/rapidbm25/__init__.py`, `server.json`, and `mcpb/` (tests check this).
+2. Record the version in `CHANGELOG.md`.
+3. Merge to `main` and push a tag `vX.Y.Z` whose name matches that version.
+4. `.github/workflows/wheels.yml` builds and tests the wheels, then publishes to PyPI with trusted publishing (the `pypi` environment, OIDC, no API token). A tag that does not match `pyproject.toml` is refused.
+
+Publishing `server.json` to the MCP Registry stays a manual run of the same workflow (`publish` and `mcp_registry`) after the PyPI release is visible. The PyPI trusted publisher must allow `wheels.yml` in the `pypi` environment.

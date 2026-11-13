@@ -1,16 +1,20 @@
 name: wheels
 
 # Builds and tests rapidbm25 wheels and the sdist on every platform; uploads them
-# as workflow artifacts. Nothing is published on push or pull_request.
+# as workflow artifacts. A branch push or a pull request does not publish.
+# A tag vX.Y.Z publishes to PyPI after the tests pass.
 #
-# Release (manual): Actions > wheels > Run workflow on main with publish=true.
-# That uploads to PyPI with trusted publishing (OIDC, no API token) through the
-# `pypi` environment, then, if mcp_registry=true, publishes server.json to the
-# official MCP Registry with GitHub OIDC (also no token).
+# Release: push a tag vX.Y.Z that matches pyproject.toml. That uploads to PyPI
+# with trusted publishing (OIDC, no API token) through the `pypi` environment.
+# A manual run on main with publish=true does the same upload. If
+# mcp_registry=true on that manual run, server.json is published to the
+# official MCP Registry with GitHub OIDC (also no token). Tag pushes do not
+# publish the MCP registry entry.
 
 on:
   push:
     branches: [main]
+    tags: ["v[0-9]*"]
   pull_request:
   workflow_dispatch:
     inputs:
@@ -28,7 +32,9 @@ permissions:
 
 concurrency:
   group: wheels-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
+  # Do not cancel a tag build or a manual publish. Pull requests and branch
+  # pushes still cancel their own superseded runs.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref_type == 'branch') }}
 
 env:
   # cargo-auditable reads this when it runs as the rustc wrapper under maturin
@@ -139,8 +145,9 @@ jobs:
           ls -l dist; echo "count: $(ls dist | wc -l)"
 
   publish:
-    # Never runs on push or pull_request: manual dispatch on main with publish=true only.
-    if: github.event_name == 'workflow_dispatch' && inputs.publish == true && github.ref == 'refs/heads/main'
+    # Tag vX.Y.Z, or a manual dispatch on main with publish=true. Never on a
+    # branch push or a pull request.
+    if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && inputs.publish == true && github.ref == 'refs/heads/main')
     needs: [summary]
     runs-on: ubuntu-24.04
     environment:
@@ -148,7 +155,18 @@ jobs:
       url: https://pypi.org/project/rapidbm25/
     permissions:
       id-token: write   # PyPI trusted publishing (OIDC); no API token anywhere
+      contents: read
     steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Tag must match the package version
+        if: github.event_name == 'push'
+        run: |
+          tag="${GITHUB_REF#refs/tags/v}"
+          ver=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          if [ "$tag" != "$ver" ]; then
+            echo "tag v$tag does not match pyproject version $ver" >&2
+            exit 1
+          fi
       - uses: actions/download-artifact@v8.0.2
         with: { path: dist, merge-multiple: true }
       - uses: pypa/gh-action-pypi-publish@v1.14.3

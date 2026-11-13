@@ -55,6 +55,47 @@ def test_symlink_and_hardlink_do_not_escape_roots(tmp_path: Path, monkeypatch):
     assert link.stat().st_nlink > 1
 
 
+def test_native_load_defaults_to_a_copy(tmp_path: Path):
+    import rapidbm25
+
+    path = tmp_path / "idx.rbm25"
+    BM25Okapi([["hello", "world"]]).save(path)
+    loaded = rapidbm25._native.Index.load(str(path))
+    assert loaded.mapped is False
+
+
+def test_hostile_header_raises_value_error(tmp_path: Path):
+    path = tmp_path / "bad.rbm25"
+    # Magic, then a header length that overflows 16 + len on a 64-bit host.
+    path.write_bytes(b"RBM25\x01\n\x00" + (2**64 - 1).to_bytes(8, "little"))
+    with pytest.raises(ValueError, match="too large"):
+        BM25Okapi.load(path)
+
+    header = {
+        "format": 1, "kind": "static", "endian": "little", "variant": "okapi",
+        "fixes": False, "k1": "3ff8000000000000", "b": "3fe8000000000000",
+        "epsilon": "3fd0000000000000", "delta": "3fe0000000000000",
+        "avgdl": "0000000000000000", "average_idf": "0000000000000000",
+        "sections": {
+            "doc_len": ["0000000000000020", 2**32],
+            "idf": ["0000000000000020", 1],
+            "offsets": ["0000000000000020", 2],
+            "post_doc": ["0000000000000020", 0],
+            "post_tf": ["0000000000000020", 0],
+            "norm": ["0000000000000020", 2**32],
+            "doc_terms_off": ["0000000000000020", 2**32 + 1],
+            "doc_terms_tid": ["0000000000000020", 0],
+            "doc_terms_tf": ["0000000000000020", 0],
+            "terms": ["0000000000000020", 0],
+        },
+    }
+    raw = json.dumps(header, separators=(",", ":")).encode()
+    huge = tmp_path / "huge.rbm25"
+    huge.write_bytes(b"RBM25\x01\n\x00" + len(raw).to_bytes(8, "little") + raw)
+    with pytest.raises(ValueError, match="does not fit in u32"):
+        BM25Okapi.load(huge)
+
+
 def test_default_load_survives_truncation_and_mmap_is_opt_in(tmp_path: Path):
     path = tmp_path / "idx.rbm25"
     src = BM25Okapi([["hello", "world"], ["other", "text"]])

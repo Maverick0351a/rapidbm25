@@ -49,6 +49,19 @@ def ref_topn(scores, n):
 
 
 def gen_case(rng: random.Random):
+    variant = rng.choice(["BM25Okapi", "BM25L", "BM25Plus"])
+    kw = {}
+    if rng.random() < 0.5:
+        kw["k1"] = rng.choice([0.0, 0.5, 1.2, 1.5, 2.0, 3.7])
+        kw["b"] = rng.choice([0.0, 0.3, 0.75, 1.0])
+    if variant == "BM25Okapi" and rng.random() < 0.3:
+        kw["epsilon"] = rng.choice([0.0, 0.1, 0.25, 1.0])
+    if variant != "BM25Okapi" and rng.random() < 0.3:
+        kw["delta"] = rng.choice([0.0, 0.5, 1, 2.5])
+    # The loop below refuses an all-empty corpus. Draw one explicitly so the
+    # empty-corpus ZeroDivisionError is not only covered by the pytest oracle.
+    if rng.random() < 0.05:
+        return variant, [], kw, [[], ["a"]]
     vocab_n = rng.choice([1, 2, 5, 20, 200, 2000])
     vocab = [f"t{i}" for i in range(vocab_n)] + ["Ünï", "a b", ""]
     n_docs = rng.choice([1, 2, 3, 10, 50, 300, 1000])
@@ -65,15 +78,6 @@ def gen_case(rng: random.Random):
         corpus[0] = [vocab[0]]
     if rng.random() < 0.2:  # duplicated docs => score ties
         corpus += [list(corpus[0])] * rng.randint(1, 5)
-    variant = rng.choice(["BM25Okapi", "BM25L", "BM25Plus"])
-    kw = {}
-    if rng.random() < 0.5:
-        kw["k1"] = rng.choice([0.0, 0.5, 1.2, 1.5, 2.0, 3.7])
-        kw["b"] = rng.choice([0.0, 0.3, 0.75, 1.0])
-    if variant == "BM25Okapi" and rng.random() < 0.3:
-        kw["epsilon"] = rng.choice([0.0, 0.1, 0.25, 1.0])
-    if variant != "BM25Okapi" and rng.random() < 0.3:
-        kw["delta"] = rng.choice([0.0, 0.5, 1, 2.5])
     queries = []
     for _ in range(rng.randint(1, 4)):
         ql = rng.randint(0, 12)

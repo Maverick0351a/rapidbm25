@@ -53,50 +53,135 @@ TOOLS = [
 ]
 
 
+# shortcut: MCP text indexes accept at most 100_000 documents and queries of
+# 100_000 characters. Raise the caps when a caller indexes more through the server.
+_MAX_DOCS = 100_000
+_MAX_QUERY_CHARS = 100_000
+_MAX_NAME = 256
+_MAX_CHUNK_LINES = 10_000
+
+
+def _name(value, what: str) -> str:
+    if not isinstance(value, str) or not value or len(value) > _MAX_NAME:
+        raise ValueError(f"{what} must be a non-empty string of at most {_MAX_NAME} characters")
+    return value
+
+
+def _finite(value, name: str, default: float) -> float:
+    if value is None:
+        value = default
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError(f"{name} must be a number")
+    out = float(value)
+    if out != out or out in (float("inf"), float("-inf")):
+        raise ValueError(f"{name} must be finite")
+    return out
+
+
+def _int_param(value, name: str, default: int, lo: int, hi: int) -> int:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        raise TypeError(f"{name} must be an integer")
+    if isinstance(value, float):
+        if not value.is_integer():
+            raise TypeError(f"{name} must be an integer")
+        value = int(value)
+    if not isinstance(value, int):
+        raise TypeError(f"{name} must be an integer")
+    if value < lo or value > hi:
+        raise ValueError(f"{name} must be between {lo} and {hi}")
+    return value
+
+
 def _build_params(a):
-    p = {"k1": float(a.get("k1", 1.5)), "b": float(a.get("b", 0.75))}
-    return a.get("variant", "okapi"), p
+    variant = a.get("variant", "okapi")
+    if variant not in VARIANTS:
+        raise ValueError(f"variant must be one of {sorted(VARIANTS)}")
+    return variant, {"k1": _finite(a.get("k1"), "k1", 1.5), "b": _finite(a.get("b"), "b", 0.75)}
 
 
 def call_tool(name: str, a: dict):
+    if not isinstance(a, dict):
+        raise TypeError("tool arguments must be an object")
     if name == "bm25_index_texts":
-        docs = list(a["documents"])
-        ids = a.get("ids") or [str(i) for i in range(len(docs))]
+        index = _name(a.get("index"), "index")
+        docs = a.get("documents")
+        if not isinstance(docs, list) or not all(isinstance(d, str) for d in docs):
+            raise TypeError("documents must be a list of strings")
+        if len(docs) > _MAX_DOCS:
+            raise ValueError(f"documents must contain at most {_MAX_DOCS} strings")
+        ids = a.get("ids")
+        if ids is None:
+            ids = [str(i) for i in range(len(docs))]
+        elif not isinstance(ids, list) or not all(isinstance(i, str) for i in ids):
+            raise TypeError("ids must be a list of strings")
         if len(ids) != len(docs):
             raise ValueError("ids and documents must have the same length")
         variant, p = _build_params(a)
-        INDEXES[a["index"]] = TextIndex(ids, docs, variant, p)
-        return {"index": a["index"], "documents": len(docs)}
+        INDEXES[index] = TextIndex(ids, docs, variant, p)
+        return {"index": index, "documents": len(docs)}
     if name == "bm25_index_path":
+        index = _name(a.get("index"), "index")
+        path = a.get("path")
+        if not isinstance(path, str) or not path:
+            raise TypeError("path must be a non-empty string")
+        glob = a.get("glob", "*")
+        if not isinstance(glob, str) or not glob or len(glob) > _MAX_NAME:
+            raise ValueError("glob must be a non-empty string")
+        chunk_lines = _int_param(a.get("chunk_lines"), "chunk_lines", 40, 1, _MAX_CHUNK_LINES)
+        # The default overlap is 10, but a one-line window cannot overlap by 10.
+        if "overlap" not in a or a.get("overlap") is None:
+            overlap = min(10, chunk_lines - 1)
+        else:
+            overlap = _int_param(a.get("overlap"), "overlap", 10, 0, chunk_lines - 1)
         variant, p = _build_params(a)
-        ix = index_folder(a["path"], a.get("glob", "*"), int(a.get("chunk_lines", 40)),
-                          int(a.get("overlap", 10)), variant, p)
+        ix = index_folder(path, glob, chunk_lines, overlap, variant, p)
         if ix.live.corpus_size == 0:
             raise ValueError("no text chunks found")
-        INDEXES[a["index"]] = ix
-        return {"index": a["index"], "chunks": ix.live.corpus_size,
+        INDEXES[index] = ix
+        return {"index": index, "chunks": ix.live.corpus_size,
                 "files_reindexed": ix.last_stats.get("files_reindexed", 0),
                 "from_cache": bool(ix.last_stats.get("from_cache"))}
     if name == "bm25_search":
-        idx = INDEXES.get(a["index"])
+        index = _name(a.get("index"), "index")
+        query = a.get("query")
+        if not isinstance(query, str):
+            raise TypeError("query must be a string")
+        if len(query) > _MAX_QUERY_CHARS:
+            raise ValueError(f"query must be at most {_MAX_QUERY_CHARS} characters")
+        k = _int_param(a.get("k"), "k", 10, 1, 1000)
+        idx = INDEXES.get(index)
         if idx is None:
-            raise KeyError(f"no index named {a['index']!r}")
-        return {"results": idx.search(a["query"], int(a.get("k", 10)))}
+            raise KeyError(f"no index named {index!r}")
+        return {"results": idx.search(query, k)}
     if name == "bm25_list_indexes":
         return {"indexes": [{"index": k, "documents": len(v.ids), "variant": v.variant}
                             for k, v in INDEXES.items()]}
     if name == "bm25_drop_index":
-        return {"dropped": INDEXES.pop(a["index"], None) is not None}
+        index = _name(a.get("index"), "index")
+        return {"dropped": INDEXES.pop(index, None) is not None}
     raise KeyError(f"unknown tool {name}")
 
 
 def handle(msg: dict):
-    mid, method, params = msg.get("id"), msg.get("method"), msg.get("params") or {}
+    mid, method = msg.get("id"), msg.get("method")
     if mid is None:
         return None  # notification
+    raw_params = msg.get("params")
+    # An omitted params object is fine. An empty list is not: `or {}` would
+    # hide it, because a list is only false when it has no items.
+    if raw_params is None:
+        params = {}
+    elif not isinstance(raw_params, dict):
+        return {"jsonrpc": "2.0", "id": mid, "error": {"code": -32602, "message": "invalid params"}}
+    else:
+        params = raw_params
     try:
         if method == "initialize":
-            res = {"protocolVersion": params.get("protocolVersion", PROTOCOL),
+            # Advertise the protocol this server implements. Echoing an unknown
+            # client version would claim support we do not have.
+            res = {"protocolVersion": PROTOCOL,
                    "capabilities": {"tools": {"listChanged": False}},
                    "serverInfo": {"name": "rapidbm25", "version": __version__}}
         elif method == "ping":
@@ -105,7 +190,16 @@ def handle(msg: dict):
             res = {"tools": TOOLS}
         elif method == "tools/call":
             try:
-                out = call_tool(params["name"], params.get("arguments") or {})
+                raw_args = params.get("arguments")
+                # Same trap as params: an empty list is false, so `or {}` would
+                # accept it and then fail later on a missing field.
+                if raw_args is None:
+                    arguments = {}
+                elif not isinstance(raw_args, dict):
+                    raise TypeError("tool arguments must be an object")
+                else:
+                    arguments = raw_args
+                out = call_tool(params["name"], arguments)
                 res = {"content": [{"type": "text", "text": json.dumps(out)}],
                        "structuredContent": out, "isError": False}
             except Exception as e:  # tool errors are results, not protocol errors

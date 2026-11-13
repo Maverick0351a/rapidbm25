@@ -274,10 +274,14 @@ fn read_strings(bytes: &[u8], count: usize) -> PyResult<Vec<String>> {
     Ok(out)
 }
 
-fn push_str(buf: &mut Vec<u8>, s: &str) {
+fn push_str(buf: &mut Vec<u8>, s: &str) -> PyResult<()> {
     let b = s.as_bytes();
-    buf.extend_from_slice(&(b.len() as u32).to_le_bytes());
+    // The on-disk string prefix is u32. Truncating it would make load read the
+    // wrong bytes. A string this long does not fit in the format.
+    let n = u32::try_from(b.len()).map_err(|_| PyValueError::new_err("index string is longer than 4 GiB"))?;
+    buf.extend_from_slice(&n.to_le_bytes());
     buf.extend_from_slice(b);
+    Ok(())
 }
 
 pub(crate) fn dump_static(index: &Index) -> PyResult<Vec<u8>> {
@@ -294,7 +298,7 @@ pub(crate) fn dump_static(index: &Index) -> PyResult<Vec<u8>> {
     let doc_terms_tf = pay.write_u32s(&cols.doc_terms_tf);
     let mut term_blob = Vec::new();
     for t in &cols.terms {
-        push_str(&mut term_blob, t);
+        push_str(&mut term_blob, t)?;
     }
     let terms = pay.write_bytes(&term_blob);
 
@@ -357,11 +361,16 @@ pub(crate) fn parse_header(file: &[u8]) -> PyResult<Value> {
     if file.len() < 16 || file.get(..8) != Some(MAGIC.as_slice()) {
         return Err(PyValueError::new_err("not a rapidbm25 index (bad magic)"));
     }
-    let header_len = u64::from_le_bytes(file[8..16].try_into().unwrap()) as usize;
-    if 16 + header_len > file.len() {
+    let header_len_u = u64::from_le_bytes(file[8..16].try_into().unwrap());
+    let header_len = usize::try_from(header_len_u).map_err(|_| PyValueError::new_err("index header is too large"))?;
+    // `16 + header_len` overflows (and panics in debug) when the length is hostile.
+    let header_end = 16usize
+        .checked_add(header_len)
+        .ok_or_else(|| PyValueError::new_err("index header is too large"))?;
+    if header_end > file.len() {
         return Err(PyValueError::new_err("truncated index header"));
     }
-    let header: Value = serde_json::from_slice(&file[16..16 + header_len])
+    let header: Value = serde_json::from_slice(&file[16..header_end])
         .map_err(|e| PyValueError::new_err(format!("index header is not json: {e}")))?;
     let format = header.get("format").and_then(|v| v.as_u64()).unwrap_or(0);
     if format != 1 {
@@ -396,6 +405,22 @@ fn can_mmap() -> bool {
     cfg!(all(target_pointer_width = "64", target_endian = "little"))
 }
 
+/// Doc ids and term ids are stored as `u32`. A larger count would truncate
+/// those ids on the way into the lookup table.
+fn reject_id_space(n_docs: u64, n_terms: u64) -> PyResult<()> {
+    if n_docs > u32::MAX as u64 || n_terms > u32::MAX as u64 {
+        return Err(PyValueError::new_err(
+            "document or term count does not fit in u32",
+        ));
+    }
+    Ok(())
+}
+
+fn plus_one(n: u64) -> PyResult<u64> {
+    // `n + 1` panics in debug when a hostile header sets the count to u64::MAX.
+    n.checked_add(1).ok_or_else(|| PyValueError::new_err("document or term count does not fit in u32"))
+}
+
 pub(crate) fn load_static_bytes(file: &[u8]) -> PyResult<Index> {
     let header = parse_header(file)?;
     if header.get("kind").and_then(|v| v.as_str()) != Some("static") {
@@ -418,12 +443,16 @@ pub(crate) fn load_static_bytes(file: &[u8]) -> PyResult<Index> {
     if n_posts != n_posts2 || n_doc_terms != n_doc_terms2 || n_norm != n_docs {
         return Err(PyValueError::new_err("inconsistent section lengths"));
     }
-    if n_offsets != n_terms + 1 || n_dto != n_docs + 1 {
+    if n_offsets != plus_one(n_terms)? || n_dto != plus_one(n_docs)? {
         return Err(PyValueError::new_err("inconsistent offset table lengths"));
     }
     if post_doc_off % 4 != 0 || dtt_off % 4 != 0 || dtf_off % 4 != 0 {
         return Err(PyValueError::new_err("u32 section is not 4-byte aligned"));
     }
+    // Before any column is allocated. A header can ask for 2^32 entries in a
+    // file that is only a few kilobytes; `need` would also reject that, but a
+    // count past the id space is a format error even when the bytes exist.
+    reject_id_space(n_docs, n_terms)?;
     let doc_len = read_u64s(file, doc_len_off, n_docs)?;
     let idf = read_f64s(file, idf_off, n_terms)?;
     let offsets_u = read_u64s(file, offsets_off, n_offsets)?;
@@ -567,7 +596,7 @@ fn load_static_mapped(mmap: Mmap) -> PyResult<Index> {
     let (dtf_off, n_doc_terms2) = section_pair(sections, "doc_terms_tf")?;
     let (terms_off, terms_len) = section_pair(sections, "terms")?;
     // Validate every numeric span, alignment, and posting id before keeping the map.
-    if n_offsets != n_terms + 1 || n_dto != n_docs + 1 {
+    if n_offsets != plus_one(n_terms)? || n_dto != plus_one(n_docs)? {
         return Err(PyValueError::new_err("inconsistent offset table lengths"));
     }
     if n_posts != n_posts2 || n_doc_terms != n_doc_terms2 || n_norm != n_docs {
@@ -576,6 +605,7 @@ fn load_static_mapped(mmap: Mmap) -> PyResult<Index> {
     if post_doc_off % 4 != 0 || dtt_off % 4 != 0 || dtf_off % 4 != 0 {
         return Err(PyValueError::new_err("u32 section is not 4-byte aligned"));
     }
+    reject_id_space(n_docs, n_terms)?;
     let _ = read_u64s(&mmap, doc_len_off, n_docs)?;
     let _ = read_f64s(&mmap, idf_off, n_terms)?;
     let offsets_u = read_u64s(&mmap, offsets_off, n_offsets)?;
@@ -717,12 +747,12 @@ pub(crate) fn dump_live(
     let mut blob = Vec::new();
     blob.extend_from_slice(&(docs.len() as u64).to_le_bytes());
     for d in docs {
-        push_str(&mut blob, &d.id);
-        push_str(&mut blob, &d.text);
-        push_str(&mut blob, &d.meta);
+        push_str(&mut blob, &d.id)?;
+        push_str(&mut blob, &d.text)?;
+        push_str(&mut blob, &d.meta)?;
         blob.extend_from_slice(&(d.tokens.len() as u64).to_le_bytes());
         for t in &d.tokens {
-            push_str(&mut blob, t);
+            push_str(&mut blob, t)?;
         }
     }
     let mut pay = Pay::new();

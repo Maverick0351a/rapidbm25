@@ -243,9 +243,9 @@ impl Tokenizer {
     }
 
     /// Tokenize many strings. The GIL is released and the work is threaded.
-    fn tokenize_many<'py>(&self, py: Python<'py>, texts: Vec<String>) -> Bound<'py, PyList> {
+    fn tokenize_many<'py>(&self, py: Python<'py>, texts: Vec<String>) -> PyResult<Bound<'py, PyList>> {
         let rows: Vec<Vec<String>> = py.detach(|| texts.par_iter().map(|t| self.tokenize_str(t)).collect());
-        PyList::new(py, rows).expect("token lists")
+        PyList::new(py, rows)
     }
 
     fn __reduce__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
