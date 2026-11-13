@@ -260,15 +260,23 @@ def os_walk(root: Path):
         yield dirpath, dirnames, filenames
 
 
-def inside(repo: Path, rel: str) -> Path:
-    """Resolve ``rel`` under ``repo`` without following a symlink out of it."""
-    if not isinstance(rel, str) or not rel.strip() or "\x00" in rel:
+def inside(repo: Path, given: str) -> Path:
+    """A path inside ``repo``. Absolute paths are allowed when they stay there.
+
+    ``..`` and symlinks are refused. The prompt tells the model the absolute
+    repository root, so grep and read_file have to accept that form.
+    """
+    if not isinstance(given, str) or not given.strip() or "\x00" in given:
         raise ValueError("path must be a non-empty string")
-    if Path(rel).is_absolute():
-        raise PermissionError("path must be relative to the repository")
     root = repo.resolve()
-    cur = root
-    for part in Path(rel).parts:
+    raw = Path(given)
+    if raw.is_absolute():
+        cur = Path(raw.anchor)
+        parts = raw.parts[1:]
+    else:
+        cur = root
+        parts = raw.parts
+    for part in parts:
         if part in ("", ".", ".."):
             raise PermissionError("path is outside the repository")
         cur = cur / part
@@ -278,7 +286,7 @@ def inside(repo: Path, rel: str) -> Path:
         resolved = cur.resolve()
         if resolved != root and root not in resolved.parents:
             raise PermissionError("path is outside the repository")
-    elif root not in cur.parents:
+    elif root not in cur.parents and cur != root:
         raise PermissionError("path is outside the repository")
     return cur
 
@@ -349,11 +357,17 @@ def tool_read(repo: Path, path, start=1, end=None) -> dict:
         end = start + MAX_READ_LINES - 1
     end = min(end, len(lines))
     body = "\n".join(f"{i}|{lines[i - 1]}" for i in range(start, end + 1))
-    return {"path": norm_file(path), "start": start, "end": end, "text": body}
+    rel = norm_file(str(target.relative_to(repo.resolve())))
+    return {"path": rel, "start": start, "end": end, "text": body}
 
 
 class Mcp:
     def __init__(self, repo: Path, cache: Path):
+        # Resolve before the process starts. A relative root plus cwd set to
+        # that same relative path makes Path.resolve() double the prefix, and
+        # every bm25_index_path is then outside the allowed roots.
+        repo = repo.resolve()
+        cache = cache.resolve()
         cache.mkdir(parents=True, exist_ok=True)
         env = {k: os.environ[k] for k in ("PATH", "HOME", "LANG", "LC_ALL", "TMPDIR") if k in os.environ}
         env.update({
@@ -890,8 +904,11 @@ def live_settings() -> tuple[str, str, str]:
             "EVAL_BASE_URL is the OpenAI-compatible root that serves /chat/completions."
         )
     base = os.environ["EVAL_BASE_URL"].strip()
-    if not (base.startswith("https://") or base.startswith("http://")):
-        fail("EVAL_BASE_URL must start with http:// or https://")
+    parts = urllib.parse.urlsplit(base)
+    host = (parts.hostname or "").lower()
+    local_http = parts.scheme == "http" and host in {"localhost", "127.0.0.1"}
+    if parts.scheme != "https" and not local_http:
+        fail("EVAL_BASE_URL must be https, or http://localhost or http://127.0.0.1")
     return os.environ["EVAL_MODEL"].strip(), base, os.environ["EVAL_API_KEY"]
 
 
@@ -911,7 +928,13 @@ def check_dry_run(report: dict) -> None:
         for row in rows:
             ok = {call["name"] for call in row["tool_calls"] if call.get("ok")}
             if not need <= ok:
-                fail(f"dry-run {row['task_id']} {arm} did not succeed at {sorted(need - ok)}")
+                missed = ", ".join(sorted(need - ok))
+                errors = "; ".join(
+                    f"{call.get('name')}: {call.get('error')}"
+                    for call in row["tool_calls"]
+                    if call.get("error")
+                )
+                fail(f"dry-run {row['task_id']} {arm} did not succeed at {missed}" + (f" ({errors})" if errors else ""))
             for key in ("correct", "tool_calls", "prompt_tokens", "completion_tokens", "wall_time_s", "tool_errors", "wrong_tool"):
                 if key not in row:
                     fail(f"dry-run row missing {key}")
@@ -982,12 +1005,12 @@ def main() -> None:
     encoded = json.dumps(report, indent=2)
     if secret and secret in encoded:
         fail("refusing to write results that contain EVAL_API_KEY")
-    if args.dry_run:
-        check_dry_run(report)
     out_json = args.out / "runs.json"
     out_md = args.out / "summary.md"
     out_json.write_text(encoded + "\n", encoding="utf-8")
     write_summary(out_md, report)
+    if args.dry_run:
+        check_dry_run(report)
     print(out_md.read_text(encoding="utf-8"))
     print(f"wrote {out_json}")
     print(f"wrote {out_md}")

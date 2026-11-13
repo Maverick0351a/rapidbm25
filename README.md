@@ -301,7 +301,8 @@ pip install "maturin>=1.7,<2" && maturin develop
 python eval/agent/harness.py --dry-run
 ```
 
-Live run, against any OpenAI-compatible chat completions endpoint:
+Live run, against an https OpenAI-compatible chat completions endpoint
+(`http` is accepted only for `localhost` and `127.0.0.1`):
 
 ```bash
 export EVAL_API_KEY=...          # secret; never commit it

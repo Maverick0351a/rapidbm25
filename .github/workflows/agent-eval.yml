@@ -32,6 +32,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v7.1.0
         with:
           python-version: "3.12"
@@ -54,6 +56,8 @@ jobs:
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
       - name: Require EVAL_API_KEY
         env:
           EVAL_API_KEY: ${{ secrets.EVAL_API_KEY }}
