@@ -1,9 +1,10 @@
 name: agent-eval
 
-# The live comparison calls a model, so it is manual only. It runs when the
-# EVAL_API_KEY secret is set and exits with a message when it is not.
-# Pull requests never run that job. They run the dry-run, which uses a
-# scripted model and needs no key.
+# The live comparison calls a model, so it is manual only, and only from main.
+# A dispatch from any other ref exits before EVAL_API_KEY is loaded, so a
+# branch's harness cannot read the secret. It also exits when the secret is
+# missing. Pull requests never run that job. They run the dry-run, which uses
+# a scripted model and needs no key.
 
 on:
   pull_request:
@@ -55,8 +56,16 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
+      - name: Only main may run the live eval
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "Agent eval did not run."
+            echo "Dispatch this workflow from main. Refusing $GITHUB_REF so EVAL_API_KEY is not given to another branch's code."
+            exit 1
+          fi
       - uses: actions/checkout@v7.0.1
         with:
+          ref: main
           persist-credentials: false
       - name: Require EVAL_API_KEY
         env:

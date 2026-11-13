@@ -311,9 +311,10 @@ export EVAL_BASE_URL=https://api.openai.com/v1   # root that serves /chat/comple
 python eval/agent/harness.py
 ```
 
-The GitHub workflow `agent-eval` runs the live comparison only from Actions → Run workflow,
-and only if the `EVAL_API_KEY` repository secret is set. The form supplies the model and
-base URL. Pull requests run the dry-run and do not call a model.
+The GitHub workflow `agent-eval` runs the live comparison only from Actions → Run workflow
+on `main`, and only if the `EVAL_API_KEY` repository secret is set. A dispatch from any
+other ref stops before that secret is loaded. The form supplies the model and base URL.
+Pull requests run the dry-run and do not call a model.
 
 ## Build from source
 
