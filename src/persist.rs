@@ -24,7 +24,6 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use rustc_hash::FxHashMap;
 use serde_json::{json, Value};
-use std::ffi::OsStr;
 use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -710,17 +709,12 @@ fn libc_eloop() -> i32 {
 
 static TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
-/// Temp path in the same directory as `path`. The full file name is kept, so
-/// `foo.txt` and `foo.md` do not share a temp file, and a pid plus a counter
-/// keeps concurrent saves apart.
+/// Temp path in the same directory as `path`. The name is only a pid and a
+/// counter, so `foo.txt` and `foo.md` do not share it and a long destination
+/// name still fits in NAME_MAX.
 fn unique_temp_path(path: &Path) -> PathBuf {
     let seq = TEMP_SEQ.fetch_add(1, Ordering::Relaxed);
-    let pid = std::process::id();
-    let mut name = path
-        .file_name()
-        .unwrap_or(OsStr::new("rbm25"))
-        .to_os_string();
-    name.push(format!(".{pid}.{seq}.rbm25.tmp"));
+    let name = format!(".{}.{seq}.rbm25.tmp", std::process::id());
     match path.parent() {
         Some(parent) if !parent.as_os_str().is_empty() => parent.join(name),
         _ => PathBuf::from(name),

@@ -353,17 +353,29 @@ def test_failed_save_keeps_existing_index(tmp_path: Path):
     BM25Okapi([["beta"]]).save(dest)
     assert BM25Okapi.load(dest).doc_freqs == [{"beta": 1}]
     blob = dest.read_bytes()
-    # The temp name is the full file name plus a unique suffix, so a long
-    # destination makes the temp exceed NAME_MAX. The existing bytes must stay.
-    long = tmp_path / ("n" * 240 + ".rbm25")
-    try:
-        long.write_bytes(blob)
-    except OSError:
-        pytest.skip("this platform rejects a 246-byte file name")
+    # Parent is a file, so the save fails before replace on every OS.
     with pytest.raises(ValueError):
-        BM25Okapi([["lose"]]).save(long)
-    assert long.read_bytes() == blob
-    assert BM25Okapi.load(long).doc_freqs == [{"beta": 1}]
+        BM25Okapi([["lose"]]).save(dest / "nested.rbm25")
+    assert dest.read_bytes() == blob
+    assert BM25Okapi.load(dest).doc_freqs == [{"beta": 1}]
+
+
+def test_chunk_cap_keeps_previous_chunks(tmp_path: Path, monkeypatch):
+    _roots(monkeypatch, tmp_path)
+    from rapidbm25.textindex import MAX_CHUNKS, PathIndex
+
+    doc = tmp_path / "doc.txt"
+    doc.write_text("alpha stays indexed\n")
+    ix = PathIndex()
+    ix.sync(tmp_path, "*", 1, 0)
+    kept = list(ix.files["doc.txt"]["chunk_ids"])
+    assert ix.search("alpha")[0]["id"] == kept[0]
+    doc.write_bytes(b"\n" * (MAX_CHUNKS + 1))
+    with pytest.raises(ValueError, match=rf"chunk cap exceeded \({MAX_CHUNKS}\)"):
+        ix.sync(tmp_path, "*", 1, 0)
+    assert ix.files["doc.txt"]["chunk_ids"] == kept
+    assert ix.live.ids() == kept
+    assert ix.search("alpha")[0]["id"] == kept[0]
 
 
 def test_halfwidth_katakana_is_bigrammed_and_package_is_typed():

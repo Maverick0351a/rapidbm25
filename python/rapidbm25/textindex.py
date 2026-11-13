@@ -318,12 +318,14 @@ class PathIndex:
                 continue
             reindexed += 1
             if prev:
-                old_ids = prev["chunk_ids"]
-                for cid in old_ids:
+                # Count the slots this file will free, but do not drop its chunks
+                # until the replacement is built. A cap error must leave them.
+                budget[0] += len(prev["chunk_ids"])
+            ids, texts = chunk_bytes(raw, rel, chunk_lines, overlap, budget)
+            if prev:
+                for cid in prev["chunk_ids"]:
                     self.live.delete(cid)
                     self.sets.pop(cid, None)
-                budget[0] += len(old_ids)
-            ids, texts = chunk_bytes(raw, rel, chunk_lines, overlap, budget)
             for cid, text in zip(ids, texts):
                 self.live.add(cid, text, metadata={"path": rel})
                 self._remember(cid, text)

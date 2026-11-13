@@ -53,8 +53,9 @@ TOOLS = [
 ]
 
 
-# shortcut: MCP text indexes accept at most 100_000 documents and queries of
-# 100_000 characters. Raise the caps when a caller indexes more through the server.
+# shortcut: MCP text indexes accept at most 100_000 documents (each at most
+# 1 MB), queries of 100_000 characters, a 16 MiB JSON-RPC line, and 200_000
+# folder-index chunks. Raise the caps when a caller indexes more through the server.
 _MAX_DOCS = 100_000
 _MAX_DOC_BYTES = 1_000_000
 _MAX_QUERY_CHARS = 100_000
