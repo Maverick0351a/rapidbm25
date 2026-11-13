@@ -405,10 +405,11 @@ fn can_mmap() -> bool {
     cfg!(all(target_pointer_width = "64", target_endian = "little"))
 }
 
-/// Doc ids and term ids are stored as `u32`. A larger count would truncate
-/// those ids on the way into the lookup table.
+/// Doc ids and term ids are stored as `u32`. A count of `u32::MAX + 1` uses
+/// every id from 0 through `u32::MAX`. One more would truncate.
 fn reject_id_space(n_docs: u64, n_terms: u64) -> PyResult<()> {
-    if n_docs > u32::MAX as u64 || n_terms > u32::MAX as u64 {
+    let limit = u64::from(u32::MAX) + 1;
+    if n_docs > limit || n_terms > limit {
         return Err(PyValueError::new_err(
             "document or term count does not fit in u32",
         ));

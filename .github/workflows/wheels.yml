@@ -31,9 +31,10 @@ permissions:
   contents: read
 
 concurrency:
-  group: wheels-${{ github.ref }}
-  # Do not cancel a tag build or a manual publish. Pull requests and branch
-  # pushes still cancel their own superseded runs.
+  # Include the event. A manual publish and a push to main share refs/heads/main.
+  # cancel-in-progress belongs to the new run, so that push would cancel the
+  # publish if they were one group. Tag pushes use refs/tags/v* and are separate.
+  group: wheels-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref_type == 'branch') }}
 
 env:
