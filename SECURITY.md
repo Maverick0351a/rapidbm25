@@ -25,3 +25,4 @@ You should get an acknowledgement within 7 days.
   cache is created mode `0700` with files mode `0600`.
 - Release wheels are built in GitHub Actions with `cargo-auditable` (Rust dependency list embedded
   in the binary, readable with `cargo audit bin`) and uploaded to PyPI with trusted publishing.
+  A tag `vX.Y.Z` that matches the package version publishes; the workflow has no PyPI token.

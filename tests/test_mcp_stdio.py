@@ -5,6 +5,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 
 def rpc(proc, i, method, params=None):
     proc.stdin.write(json.dumps({"jsonrpc": "2.0", "id": i, "method": method, "params": params or {}}) + "\n")
@@ -33,6 +35,36 @@ def test_stdio_roundtrip(tmp_path: Path):
         r = rpc(proc, 6, "tools/call", {"name": "bm25_index_texts", "arguments": {"index": "t", "documents": ["red fox", "blue sky"]}})
         r = rpc(proc, 7, "tools/call", {"name": "bm25_search", "arguments": {"index": "t", "query": "fox"}})
         assert r["result"]["structuredContent"]["results"][0]["id"] == "0"
+        init_old = rpc(proc, 8, "initialize", {"protocolVersion": "1999-01-01"})
+        assert init_old["result"]["protocolVersion"] == "2025-06-18"
     finally:
         proc.stdin.close()
         proc.wait(timeout=10)
+
+
+def test_tool_arguments_are_validated():
+    from rapidbm25.mcp_server import PROTOCOL, call_tool, handle
+
+    refused = handle({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "1999-01-01"}})
+    assert refused["result"]["protocolVersion"] == PROTOCOL
+    bad_params = handle({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": []})
+    assert bad_params["error"]["code"] == -32602
+    bad_args = handle({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
+                       "params": {"name": "bm25_search", "arguments": []}})
+    assert bad_args["result"]["isError"] is True
+    assert "object" in bad_args["result"]["content"][0]["text"]
+
+    with pytest.raises(TypeError):
+        call_tool("bm25_index_texts", {"index": "t", "documents": "hello"})
+    with pytest.raises(TypeError):
+        call_tool("bm25_search", {"index": "t", "query": "q", "k": True})
+    with pytest.raises(ValueError):
+        call_tool("bm25_search", {"index": "t", "query": "q", "k": 0})
+    with pytest.raises(ValueError):
+        call_tool("bm25_search", {"index": "t", "query": "q", "k": 1001})
+    with pytest.raises(ValueError):
+        call_tool("bm25_index_texts", {"index": "t", "documents": ["a"], "k1": float("nan")})
+    with pytest.raises(ValueError):
+        call_tool("bm25_index_path", {"index": "t", "path": ".", "chunk_lines": 0})
+    with pytest.raises(ValueError):
+        call_tool("bm25_index_path", {"index": "t", "path": ".", "chunk_lines": 4, "overlap": 4})

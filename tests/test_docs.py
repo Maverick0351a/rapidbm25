@@ -80,7 +80,7 @@ def test_v02_docs_mention_features():
         assert name in README
         assert name in llms
     assert "RAPIDBM25_CACHE" in README
-    assert "Unreleased 0.2.0" in changelog
+    assert "## 0.2.0" in changelog and "## 0.2.1" in changelog
     assert "LiveIndex" in skill and "fixes=True" in skill
     assert "RAPIDBM25_CACHE" in (ROOT / "mcp/README.md").read_text(encoding="utf-8")
 

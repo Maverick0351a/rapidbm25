@@ -2,9 +2,20 @@
 
 All notable changes to this project are documented here. Versions follow [SemVer](https://semver.org/).
 
-## Unreleased 0.2.0
+## 0.2.1
 
-Not published. The default `BM25Okapi` / `BM25L` / `BM25Plus` scores stay bit-identical to rank_bm25.
+Not tagged yet. Scores stay bit-identical to rank_bm25. 0.2.0 is already on PyPI, so these fixes ship as the next version.
+
+- **Safe native load.** `_native.Index.load` defaults to a copy, same as `BM25Okapi.load`. `mmap=True` is still opt-in.
+- **Hostile index files.** A header length that overflows, or a document or term count that does not fit in `u32`, raises `ValueError` instead of panicking or truncating ids. A string longer than 4 GiB is rejected on save instead of writing a truncated length prefix.
+- **`python -O`.** The `get_top_n` and `get_batch_scores` checks still run when assertions are stripped. They still raise `AssertionError`, matching rank_bm25 under a normal interpreter.
+- **MCP arguments.** `documents` must be a list of strings (a bare string is not indexed character by character). `k` is an integer from 1 to 1000. `chunk_lines` is 1..10000 and `overlap` is smaller than the window. `k1` and `b` must be finite. `initialize` always reports protocol `2025-06-18`.
+- **Oracle tests.** Empty corpus, empty query, non-ascii tokens, and duplicate documents are compared bit for bit with rank_bm25 0.2.2 for Okapi, BM25L, and BM25Plus. The fuzz harness also draws an empty corpus.
+- **Release.** Pushing a tag `vX.Y.Z` that matches the package version publishes the wheels to PyPI with the existing trusted publisher. No token is stored in the repo.
+
+## 0.2.0
+
+Published to PyPI. The default `BM25Okapi` / `BM25L` / `BM25Plus` scores stay bit-identical to rank_bm25.
 
 - **Persistence.** Every compat class pickles. `save(path)` / `load(path)` write a versioned little-endian file (`RBM25` format 1). Scalar floats are stored as IEEE-754 hex, so a round trip is bit-identical. `load` copies the file into memory. `mmap=True` is opt-in and unsafe if that file changes. `save` creates its temp file with `O_EXCL` and `O_NOFOLLOW`, so a symlink at the temp name is not followed.
 - **`LiveIndex`.** Add, delete, and update documents by stable string id, with optional metadata and a `where` filter (`$eq`, `$ne`, `$in`, `$nin`, `$gt`, `$gte`, `$lt`, `$lte`, `$exists`, or a callable). Global statistics update on each mutation; posting lists are not rebuilt from scratch. `get_scores` matches a static index built on `corpus()` (same variant, `compat`, parameters, and `fixes`). `fixes` defaults to `True` (pass `fixes=False` for bit-exact rank_bm25 bugs). An empty live index is valid. A `threading.Lock` plus an internal mutex make concurrent add/search safe; a filter must not call back into the index. The MCP folder index uses `LiveIndex`, so it follows this default.

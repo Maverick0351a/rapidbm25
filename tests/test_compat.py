@@ -1,4 +1,7 @@
 """API-compat tests. The first two mirror the upstream loading test's behavior."""
+import subprocess
+import sys
+
 import numpy as np
 import pytest
 
@@ -42,6 +45,26 @@ def test_batch_scores_and_attrs():
 def test_get_top_n_mismatch_asserts():
     with pytest.raises(AssertionError):
         BM25Okapi(tokenized).get_top_n(["x"], corpus[:2])
+
+
+def test_length_checks_survive_python_optimize():
+    code = (
+        "from rapidbm25 import BM25Okapi\n"
+        "a = BM25Okapi([['a'], ['b']])\n"
+        "try:\n"
+        "    a.get_top_n(['a'], ['only'])\n"
+        "except AssertionError:\n"
+        "    pass\n"
+        "else:\n"
+        "    raise SystemExit('get_top_n')\n"
+        "try:\n"
+        "    a.get_batch_scores(['a'], [9])\n"
+        "except AssertionError:\n"
+        "    pass\n"
+        "else:\n"
+        "    raise SystemExit('get_batch_scores')\n"
+    )
+    subprocess.run([sys.executable, "-O", "-c", code], check=True)
 
 
 def test_empty_corpus_raises_like_reference():

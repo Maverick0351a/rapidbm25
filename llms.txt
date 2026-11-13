@@ -1,9 +1,9 @@
 # rapidbm25
 
-> Rust-native BM25 (Okapi, L, Plus) for Python. Drop-in for rank_bm25: same API, bit-identical scores, ~1,470x faster get_scores, fast top_n. Also save/load (mmap), LiveIndex add/delete/update, batch search, optional Snowball/CJK tokenizers, fuse() for hybrid retrieval, LangChain and LlamaIndex retrievers, and a stdio MCP server that caches folder indexes. Apache-2.0. No network use. Permissive deps only.
+> Rust-native BM25 (Okapi, L, Plus) for Python. Drop-in for rank_bm25: same API, bit-identical scores, ~1,470x faster get_scores, fast top_n. Also save/load (the default copies the file; mmap is opt-in), LiveIndex add/delete/update, batch search, optional Snowball/CJK tokenizers, fuse() for hybrid retrieval, LangChain and LlamaIndex retrievers, and a stdio MCP server that caches folder indexes. Apache-2.0. No network use. Permissive deps only.
 
 ## Install
-- `pip install rapidbm25`. Wheels: CPython 3.9-3.15, Linux glibc/musl x86_64+aarch64, macOS x86_64+arm64, Windows x86_64
+- `pip install rapidbm25`. Wheels: CPython 3.9-3.15, Linux glibc/musl x86_64+aarch64, macOS x86_64 (10.13+, 10.15+ on 3.14/3.15) and arm64 11.0+, Windows x86_64
 
 ## Python API
 - `from rapidbm25 import BM25Okapi, BM25L, BM25Plus` (same constructors as rank_bm25: corpus, tokenizer=None, k1=1.5, b=0.75, epsilon=0.25 | delta; BM25L/BM25Plus also take compat="0.2.2" (default, the PyPI release) or "47aa3dd" (git main))

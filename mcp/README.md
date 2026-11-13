@@ -10,6 +10,8 @@ or `python -m rapidbm25.mcp_server`). Pure Python on top of the Rust core; no MC
 | `bm25_search` | Top-k results with id, score, and a text snippet |
 | `bm25_list_indexes` / `bm25_drop_index` | Housekeeping |
 
+`bm25_index_texts` requires `documents` to be a list of strings (at most 100,000), not one string. `bm25_search` `k` is an integer from 1 to 1000. `chunk_lines` is 1..10000 and `overlap` must be smaller than that window. `k1` and `b` must be finite. `initialize` reports protocol `2025-06-18`.
+
 `bm25_index_path` only reads inside `RAPIDBM25_ROOTS` (default: the working directory).
 Nothing leaves the machine. Text indexes live in memory. A folder index is also written
 under `RAPIDBM25_CACHE` (default `~/.cache/rapidbm25`). The next `bm25_index_path` for the

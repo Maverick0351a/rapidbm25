@@ -576,10 +576,12 @@ impl Index {
         persist::write_atomic(Path::new(path), &bytes)
     }
 
-    /// Load a static index. `mmap=True` (the default) scores from a read-only
-    /// mapping on 64-bit little-endian hosts; other hosts copy the columns.
+    /// Load a static index. `mmap=false` (the default) copies the columns.
+    /// `mmap=true` maps the file on 64-bit little-endian hosts and is unsafe
+    /// if that file is truncated or written in place. The Python classes pass
+    /// the flag through; their default is also a copy.
     #[staticmethod]
-    #[pyo3(signature = (path, mmap=true))]
+    #[pyo3(signature = (path, mmap=false))]
     fn load(path: &str, mmap: bool) -> PyResult<Self> {
         if mmap {
             persist::load_static_mmap(Path::new(path))

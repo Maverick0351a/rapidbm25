@@ -107,6 +107,9 @@ impl Inner {
         if let Some(&t) = self.lookup.get(tok) {
             return t;
         }
+        // shortcut: term ids and per-term document frequencies are u32. A vocabulary
+        // or a document frequency past 2^32 wraps. Return an error from term_id
+        // when an index can actually hold that many terms.
         let t = self.terms.len() as u32;
         self.lookup.insert(tok.to_owned(), t);
         self.terms.push(tok.to_owned());
@@ -149,6 +152,8 @@ impl Inner {
         if let Some(s) = self.free.pop() {
             s
         } else {
+            // shortcut: slot ids are u32. Past 2^32 slots this wraps; check alloc_slot
+            // when a live index can hold that many documents.
             let s = self.slots.len() as u32;
             self.slots.push(Slot {
                 alive: false,
