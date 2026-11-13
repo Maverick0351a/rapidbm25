@@ -243,6 +243,30 @@ python bench/gen_workload.py --out /tmp/bm25-wl          # chunks your Python st
 python bench/bench_interleaved.py --workloads /tmp/bm25-wl --out /tmp/bench.json
 ```
 
+### Reproduce the benchmarks
+
+Fixed-seed synthetic corpora of 500, 4,000, and 8,000 documents. The command times index
+build, `get_scores`, and `top_n` against rank_bm25 0.2.2 (batch median, plus per-query
+p50 and p99), records peak RSS and the saved index size, smoke-tests the MCP server,
+and writes `bench.json` and `bench.md`. CI runs the 500- and 4,000-document sizes and
+fails if the 4,000-document `get_scores` speedup drops below the floor in `bench/bench.py`.
+
+```bash
+pip install rapidbm25 rank-bm25==0.2.2
+python bench/bench.py --out /tmp/rapidbm25-bench
+```
+
+Retrieval quality (nDCG@10 and recall@100) reads a local BEIR tree: one dataset directory,
+or a directory of them (`corpus.jsonl`, `queries.jsonl`, `qrels/test.tsv`). The script does
+not download datasets. `bm25s` is scored when it is installed and skipped when it is not.
+CI caches scifact and also fails if rapidbm25 and rank_bm25 differ in nDCG@10 by more than
+the tolerance in `bench/bench.py`.
+
+```bash
+pip install bm25s   # optional
+python bench/bench.py --quality /path/to/beir-datasets --out /tmp/rapidbm25-bench
+```
+
 ## Correctness evidence
 
 - **Contract replay**: `contract/bm25.contract.json` holds 407 input/output vectors observed by

@@ -1,0 +1,80 @@
+name: bench
+
+# Release wheel, then a small benchmark against rank_bm25 0.2.2.
+# Pull requests and pushes to main only. This does not publish.
+# Fails only for the 4,000-document get_scores speedup floor and for
+# nDCG@10 parity with rank_bm25 on cached scifact. Ratios, not absolute times.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  actions: write # actions/cache saves the scifact download
+
+concurrency:
+  group: bench-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bench:
+    name: bench
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v7.1.0
+        with:
+          python-version: "3.13"
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache scifact
+        id: scifact
+        uses: actions/cache@v6.1.0
+        with:
+          path: beir-cache/scifact
+          key: beir-scifact-v1
+
+      - name: Download scifact
+        if: steps.scifact.outputs.cache-hit != 'true'
+        run: |
+          rm -rf beir-cache/scifact
+          mkdir -p beir-cache
+          curl -fsSL --retry 3 --retry-delay 2 -o /tmp/scifact.zip https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/scifact.zip
+          unzip -q /tmp/scifact.zip -d beir-cache
+          test -f beir-cache/scifact/qrels/test.tsv
+
+      - name: Build the release wheel
+        run: |
+          python -m pip install -q "maturin>=1.7,<2"
+          maturin build --release -o dist
+
+      - name: Install the wheel and rank_bm25
+        run: python -m pip install dist/*.whl "rank-bm25==0.2.2"
+
+      - name: Benchmark
+        env:
+          BENCH_OUT: ${{ runner.temp }}/rapidbm25-bench
+        run: |
+          python bench/bench.py --sizes 500,4000 --quality beir-cache/scifact --out "$BENCH_OUT"
+          python -c 'import json,os,sys; p=json.load(open(os.environ["BENCH_OUT"]+"/bench.json")); g,q=p["gate"],p["quality_gate"]; bad=[name for name,ok in (("speed", g.get("enforced") and g.get("passed")), ("ndcg", q.get("enforced") and q.get("passed"))) if not ok]; sys.exit(0 if not bad else "CI gate did not pass: "+", ".join(bad)+" "+repr({"speed":g,"ndcg":q}))'
+
+      - name: Write the table to the job summary
+        if: always()
+        env:
+          BENCH_OUT: ${{ runner.temp }}/rapidbm25-bench
+        run: |
+          if [ -f "$BENCH_OUT/bench.md" ]; then
+            cat "$BENCH_OUT/bench.md" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - uses: actions/upload-artifact@v7.0.2
+        if: always()
+        with:
+          name: bench
+          path: |
+            ${{ runner.temp }}/rapidbm25-bench/bench.json
+            ${{ runner.temp }}/rapidbm25-bench/bench.md
+          if-no-files-found: warn
