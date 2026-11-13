@@ -431,14 +431,18 @@ def run_rss_worker(kind, path, n, doc_len, vocab, seed):
     else:
         docs = read_corpus_file(path)
     gc.collect()
+    # ru_maxrss never falls, so the corpus and the imports are already in it.
+    # The library peak is only how far the index build pushes that mark.
+    before_peak = peak_rss_bytes()
     before = current_rss_bytes()
     index = cls(docs)
+    built_peak = peak_rss_bytes()
     gc.collect()
     after = current_rss_bytes()
-    rss = peak_rss_bytes()
+    peak = None if before_peak is None or built_peak is None else max(0, built_peak - before_peak)
     added = None if before is None or after is None else max(0, after - before)
-    payload = {"peak_rss_bytes": rss, "index_rss_bytes": added}
-    if rss is None:
+    payload = {"peak_rss_bytes": peak, "index_rss_bytes": added}
+    if before_peak is None:
         payload["reason"] = "resource.getrusage is unavailable"
     del index
     print(json.dumps(payload))
@@ -482,7 +486,7 @@ def measure_memory(rapid_mod, docs, label, spec=None):
     out = {
         "label": label,
         "docs": len(docs),
-        "note": "peak RSS is ru_maxrss of a fresh process that builds this corpus and index; index RSS is VmRSS added by the constructor",
+        "note": "peak RSS is the rise in ru_maxrss while the index is built, after the corpus and a collection; added by index is the VmRSS the constructor keeps",
         "rank_bm25_peak_rss_bytes": rank.get("peak_rss_bytes"),
         "rapidbm25_peak_rss_bytes": rapid.get("peak_rss_bytes"),
         "rank_bm25_index_rss_bytes": rank.get("index_rss_bytes"),

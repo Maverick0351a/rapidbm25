@@ -265,8 +265,10 @@ the tolerance in `bench/bench.py`.
 
 ```bash
 pip install bm25s   # optional
-python bench/bench.py --quality /path/to/beir-datasets --out /tmp/rapidbm25-bench
+python bench/bench.py --sizes '' --quality /path/to/beir-datasets --out /tmp/rapidbm25-bench
 ```
+
+`--sizes ''` skips the synthetic timing.
 
 ## Correctness evidence
 

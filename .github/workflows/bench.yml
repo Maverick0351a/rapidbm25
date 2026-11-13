@@ -2,8 +2,9 @@ name: bench
 
 # Release wheel, then a small benchmark against rank_bm25 0.2.2.
 # Pull requests and pushes to main only. This does not publish.
-# Fails only for the 4,000-document get_scores speedup floor and for
-# nDCG@10 parity with rank_bm25 on cached scifact. Ratios, not absolute times.
+# Fails only when bench.py's enforced gates fail: the 4,000-document
+# get_scores speedup floor, and nDCG@10 parity when scifact is present.
+# Ratios, not absolute times. A failed scifact download skips that gate.
 
 on:
   pull_request:
@@ -35,14 +36,18 @@ jobs:
         uses: actions/cache@v6.1.0
         with:
           path: beir-cache/scifact
-          key: beir-scifact-v1
+          key: beir-scifact-v2
 
       - name: Download scifact
+        id: scifact-download
         if: steps.scifact.outputs.cache-hit != 'true'
+        continue-on-error: true
         run: |
           rm -rf beir-cache/scifact
+          trap 'rm -rf beir-cache/scifact' ERR
           mkdir -p beir-cache
           curl -fsSL --retry 3 --retry-delay 2 -o /tmp/scifact.zip https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/scifact.zip
+          echo "536e14446a0ba56ed1398ab1055f39fe852686ecad24a6306c80c490fa8e0165  /tmp/scifact.zip" | sha256sum -c -
           unzip -q /tmp/scifact.zip -d beir-cache
           test -f beir-cache/scifact/qrels/test.tsv
 
@@ -58,8 +63,12 @@ jobs:
         env:
           BENCH_OUT: ${{ runner.temp }}/rapidbm25-bench
         run: |
-          python bench/bench.py --sizes 500,4000 --quality beir-cache/scifact --out "$BENCH_OUT"
-          python -c 'import json,os,sys; p=json.load(open(os.environ["BENCH_OUT"]+"/bench.json")); g,q=p["gate"],p["quality_gate"]; bad=[name for name,ok in (("speed", g.get("enforced") and g.get("passed")), ("ndcg", q.get("enforced") and q.get("passed"))) if not ok]; sys.exit(0 if not bad else "CI gate did not pass: "+", ".join(bad)+" "+repr({"speed":g,"ndcg":q}))'
+          if [ -f beir-cache/scifact/qrels/test.tsv ]; then
+            python bench/bench.py --sizes 500,4000 --quality beir-cache/scifact --out "$BENCH_OUT"
+          else
+            echo "scifact download failed or the zip checksum did not match; nDCG gate skipped." | tee -a "$GITHUB_STEP_SUMMARY"
+            python bench/bench.py --sizes 500,4000 --out "$BENCH_OUT"
+          fi
 
       - name: Write the table to the job summary
         if: always()
