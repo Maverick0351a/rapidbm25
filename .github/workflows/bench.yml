@@ -1,0 +1,89 @@
+name: bench
+
+# Release wheel, then a small benchmark against rank_bm25 0.2.2.
+# Pull requests and pushes to main only. This does not publish.
+# Fails only when bench.py's enforced gates fail: the 4,000-document
+# get_scores speedup floor, and nDCG@10 parity when scifact is present.
+# Ratios, not absolute times. A failed scifact download skips that gate.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  actions: write # actions/cache saves the scifact download
+
+concurrency:
+  group: bench-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bench:
+    name: bench
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v7.1.0
+        with:
+          python-version: "3.13"
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache scifact
+        id: scifact
+        uses: actions/cache@v6.1.0
+        with:
+          path: beir-cache/scifact
+          key: beir-scifact-v2
+
+      - name: Download scifact
+        id: scifact-download
+        if: steps.scifact.outputs.cache-hit != 'true'
+        continue-on-error: true
+        run: |
+          rm -rf beir-cache/scifact
+          trap 'rm -rf beir-cache/scifact' ERR
+          mkdir -p beir-cache
+          curl -fsSL --retry 3 --retry-delay 2 -o /tmp/scifact.zip https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/scifact.zip
+          echo "536e14446a0ba56ed1398ab1055f39fe852686ecad24a6306c80c490fa8e0165  /tmp/scifact.zip" | sha256sum -c -
+          unzip -q /tmp/scifact.zip -d beir-cache
+          test -f beir-cache/scifact/qrels/test.tsv
+
+      - name: Build the release wheel
+        run: |
+          python -m pip install -q "maturin>=1.7,<2"
+          maturin build --release -o dist
+
+      - name: Install the wheel and rank_bm25
+        run: python -m pip install dist/*.whl "rank-bm25==0.2.2"
+
+      - name: Benchmark
+        env:
+          BENCH_OUT: ${{ runner.temp }}/rapidbm25-bench
+        run: |
+          if [ -f beir-cache/scifact/qrels/test.tsv ]; then
+            python bench/bench.py --sizes 500,4000 --quality beir-cache/scifact --out "$BENCH_OUT"
+          else
+            echo "scifact download failed or the zip checksum did not match; nDCG gate skipped." | tee -a "$GITHUB_STEP_SUMMARY"
+            python bench/bench.py --sizes 500,4000 --out "$BENCH_OUT"
+          fi
+
+      - name: Write the table to the job summary
+        if: always()
+        env:
+          BENCH_OUT: ${{ runner.temp }}/rapidbm25-bench
+        run: |
+          if [ -f "$BENCH_OUT/bench.md" ]; then
+            cat "$BENCH_OUT/bench.md" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - uses: actions/upload-artifact@v7.0.2
+        if: always()
+        with:
+          name: bench
+          path: |
+            ${{ runner.temp }}/rapidbm25-bench/bench.json
+            ${{ runner.temp }}/rapidbm25-bench/bench.md
+          if-no-files-found: warn

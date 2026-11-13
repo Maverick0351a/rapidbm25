@@ -14,3 +14,4 @@ venv/
 *.mcpb
 wheelhouse/
 eval/agent/out/
+beir-cache/
