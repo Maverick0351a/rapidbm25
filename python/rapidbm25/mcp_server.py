@@ -53,12 +53,15 @@ TOOLS = [
 ]
 
 
-# shortcut: MCP text indexes accept at most 100_000 documents and queries of
-# 100_000 characters. Raise the caps when a caller indexes more through the server.
+# shortcut: MCP text indexes accept at most 100_000 documents (each at most
+# 1 MB), queries of 100_000 characters, a 16 MiB JSON-RPC line, and 200_000
+# folder-index chunks. Raise the caps when a caller indexes more through the server.
 _MAX_DOCS = 100_000
+_MAX_DOC_BYTES = 1_000_000
 _MAX_QUERY_CHARS = 100_000
 _MAX_NAME = 256
 _MAX_CHUNK_LINES = 10_000
+_MAX_LINE_BYTES = 16 * 1024 * 1024
 
 
 def _name(value, what: str) -> str:
@@ -111,6 +114,11 @@ def call_tool(name: str, a: dict):
             raise TypeError("documents must be a list of strings")
         if len(docs) > _MAX_DOCS:
             raise ValueError(f"documents must contain at most {_MAX_DOCS} strings")
+        for doc in docs:
+            # Character length is a lower bound on UTF-8 size, so a huge string
+            # is rejected before it is encoded.
+            if len(doc) > _MAX_DOC_BYTES or len(doc.encode("utf-8")) > _MAX_DOC_BYTES:
+                raise ValueError(f"each document must be at most {_MAX_DOC_BYTES} bytes")
         ids = a.get("ids")
         if ids is None:
             ids = [str(i) for i in range(len(docs))]
@@ -212,8 +220,68 @@ def handle(msg: dict):
         return {"jsonrpc": "2.0", "id": mid, "error": {"code": -32603, "message": str(e)}}
 
 
+class _LineTooLong(Exception):
+    pass
+
+
+def _read_capped_line(stream, limit: int):
+    """Read one stdin line, excluding its trailing newline.
+
+    Returns ``None`` at EOF when nothing was read. A line longer than
+    ``limit`` bytes is discarded through the next newline and raises
+    ``_LineTooLong``.
+    """
+    parts = []
+    size = 0
+    while True:
+        chunk = stream.readline(limit - size + 1)
+        if not chunk:
+            if size == 0:
+                return None
+            return b"".join(parts)
+        if chunk.endswith(b"\n"):
+            body = chunk[:-1]
+            if size + len(body) > limit:
+                raise _LineTooLong
+            parts.append(body)
+            return b"".join(parts)
+        parts.append(chunk)
+        size += len(chunk)
+        if size > limit:
+            _discard_oversize(stream)
+
+
+def _discard_oversize(stream):
+    while True:
+        chunk = stream.readline(1024 * 1024)
+        if not chunk or chunk.endswith(b"\n"):
+            break
+    raise _LineTooLong
+
+
+def _emit(resp: dict) -> None:
+    sys.stdout.write(json.dumps(resp) + "\n")
+    sys.stdout.flush()
+
+
 def main():
-    for line in sys.stdin:
+    stdin = sys.stdin.buffer
+    while True:
+        try:
+            raw = _read_capped_line(stdin, _MAX_LINE_BYTES)
+        except _LineTooLong:
+            _emit({"jsonrpc": "2.0", "id": None, "error": {
+                "code": -32600,
+                "message": f"request line exceeds {_MAX_LINE_BYTES} bytes",
+            }})
+            continue
+        if raw is None:
+            return
+        try:
+            line = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            _emit({"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "parse error"}})
+            continue
         line = line.strip()
         if not line:
             continue
@@ -224,8 +292,7 @@ def main():
         else:
             resp = handle(msg)
         if resp is not None:
-            sys.stdout.write(json.dumps(resp) + "\n")
-            sys.stdout.flush()
+            _emit(resp)
 
 
 if __name__ == "__main__":
