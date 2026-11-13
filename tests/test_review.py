@@ -324,6 +324,48 @@ def test_save_does_not_follow_temp_symlink(tmp_path: Path):
     assert LiveIndex.load(dest).ids() == ["a"]
 
 
+def test_newline_file_cannot_explode_chunks(tmp_path: Path, monkeypatch):
+    _roots(monkeypatch, tmp_path)
+    from rapidbm25.textindex import MAX_CHUNKS, index_folder
+
+    path = tmp_path / "blank.txt"
+    path.write_bytes(b"\n" * (MAX_CHUNKS + 1))
+    with pytest.raises(ValueError, match=rf"chunk cap exceeded \({MAX_CHUNKS}\)"):
+        index_folder(str(path), "*", 1, 0, use_cache=False)
+
+
+def test_save_temp_names_do_not_collide(tmp_path: Path):
+    planted = tmp_path / "note.rbm25.tmp"
+    planted.write_text("do-not-clobber")
+    txt = tmp_path / "note.txt"
+    md = tmp_path / "note.md"
+    BM25Okapi([["alpha"]]).save(txt)
+    BM25Okapi([["beta"]]).save(md)
+    assert planted.read_text() == "do-not-clobber"
+    assert [p.name for p in tmp_path.iterdir() if p.name.endswith(".rbm25.tmp")] == ["note.rbm25.tmp"]
+    assert BM25Okapi.load(txt).doc_freqs == [{"alpha": 1}]
+    assert BM25Okapi.load(md).doc_freqs == [{"beta": 1}]
+
+
+def test_failed_save_keeps_existing_index(tmp_path: Path):
+    dest = tmp_path / "keep.rbm25"
+    BM25Okapi([["alpha"]]).save(dest)
+    BM25Okapi([["beta"]]).save(dest)
+    assert BM25Okapi.load(dest).doc_freqs == [{"beta": 1}]
+    blob = dest.read_bytes()
+    # The temp name is the full file name plus a unique suffix, so a long
+    # destination makes the temp exceed NAME_MAX. The existing bytes must stay.
+    long = tmp_path / ("n" * 240 + ".rbm25")
+    try:
+        long.write_bytes(blob)
+    except OSError:
+        pytest.skip("this platform rejects a 246-byte file name")
+    with pytest.raises(ValueError):
+        BM25Okapi([["lose"]]).save(long)
+    assert long.read_bytes() == blob
+    assert BM25Okapi.load(long).doc_freqs == [{"beta": 1}]
+
+
 def test_halfwidth_katakana_is_bigrammed_and_package_is_typed():
     tok = Tokenizer(cjk=True, lowercase=False)
     assert tok("ｶﾀｶﾅ") == ["ｶﾀ", "ﾀｶ", "ｶﾅ"]

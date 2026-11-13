@@ -24,9 +24,11 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use rustc_hash::FxHashMap;
 use serde_json::{json, Value};
+use std::ffi::OsStr;
 use std::fs::File;
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 pub(crate) const MAGIC: &[u8; 8] = b"RBM25\x01\n\x00";
 
@@ -706,22 +708,82 @@ fn libc_eloop() -> i32 {
     }
 }
 
+static TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// Temp path in the same directory as `path`. The full file name is kept, so
+/// `foo.txt` and `foo.md` do not share a temp file, and a pid plus a counter
+/// keeps concurrent saves apart.
+fn unique_temp_path(path: &Path) -> PathBuf {
+    let seq = TEMP_SEQ.fetch_add(1, Ordering::Relaxed);
+    let pid = std::process::id();
+    let mut name = path
+        .file_name()
+        .unwrap_or(OsStr::new("rbm25"))
+        .to_os_string();
+    name.push(format!(".{pid}.{seq}.rbm25.tmp"));
+    match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent.join(name),
+        _ => PathBuf::from(name),
+    }
+}
+
+fn replace_file(from: &Path, to: &Path) -> std::io::Result<()> {
+    #[cfg(not(windows))]
+    {
+        // `rename` replaces an existing destination on Unix.
+        std::fs::rename(from, to)
+    }
+    #[cfg(windows)]
+    {
+        replace_file_windows(from, to)
+    }
+}
+
+#[cfg(windows)]
+fn replace_file_windows(from: &Path, to: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    const MOVEFILE_REPLACE_EXISTING: u32 = 0x1;
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn MoveFileExW(existing: *const u16, new: *const u16, flags: u32) -> i32;
+    }
+    fn wide(path: &Path) -> Vec<u16> {
+        path.as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect()
+    }
+    let from_w = wide(from);
+    let to_w = wide(to);
+    if unsafe { MoveFileExW(from_w.as_ptr(), to_w.as_ptr(), MOVEFILE_REPLACE_EXISTING) } == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
 pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> PyResult<()> {
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
             std::fs::create_dir_all(parent).map_err(|e| PyValueError::new_err(e.to_string()))?;
         }
     }
-    let tmp = path.with_extension("rbm25.tmp");
+    let tmp = unique_temp_path(path);
     {
         let mut f = open_exclusive_temp(&tmp)?;
-        f.write_all(bytes).map_err(|e| PyValueError::new_err(e.to_string()))?;
+        if let Err(err) = f.write_all(bytes) {
+            drop(f);
+            let _ = std::fs::remove_file(&tmp);
+            return Err(PyValueError::new_err(err.to_string()));
+        }
         f.sync_all().ok();
     }
-    if std::fs::rename(&tmp, path).is_err() {
-        // Windows rename does not replace an existing destination.
-        std::fs::remove_file(path).map_err(|e| PyValueError::new_err(format!("cannot replace {path:?}: {e}")))?;
-        std::fs::rename(&tmp, path).map_err(|e| PyValueError::new_err(e.to_string()))?;
+    // Never unlink `path` first. A failed replace must leave the old index in place.
+    if let Err(err) = replace_file(&tmp, path) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(PyValueError::new_err(format!(
+            "cannot replace {path:?}: {err}"
+        )));
     }
     Ok(())
 }

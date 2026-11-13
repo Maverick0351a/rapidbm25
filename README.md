@@ -67,6 +67,7 @@ BM25L([d.split(" ") for d in docs], compat="47aa3dd")
 | `compat=` keyword on BM25L / BM25Plus | n/a | `"0.2.2"` (default) or `"47aa3dd"` |
 | Pickling / `save` / `load` | pickle only | pickle, plus a versioned file (load copies; `mmap=True` is opt-in) |
 | `fixes=` | n/a | compat classes default `False` (bit-exact). `LiveIndex` defaults `True` |
+| Lone surrogate in a token | accepted (`str` can hold it) | raises `UnicodeEncodeError` |
 
 ## Save, load, and pickle
 

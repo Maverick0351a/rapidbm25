@@ -17,6 +17,7 @@ TOKEN_RE = re.compile(r"\w+", re.UNICODE)
 VARIANTS = {"okapi": BM25Okapi, "l": BM25L, "plus": BM25Plus}
 SKIP_DIRS = {".git", "node_modules", "target", "dist", "build", ".venv", "venv", "__pycache__"}
 MAX_FILE_BYTES = 2_000_000
+MAX_CHUNKS = 200_000
 
 
 def tokenize(text: str) -> list[str]:
@@ -181,36 +182,55 @@ def iter_files(root: Path, glob: str, max_files: int) -> list[Path]:
     return files
 
 
-def chunk_bytes(raw: bytes, rel: str, chunk_lines: int, overlap: int) -> tuple[list[str], list[str]]:
+def _chunk_cap(rel: str) -> ValueError:
+    return ValueError(f"chunk cap exceeded ({MAX_CHUNKS}) at {rel}")
+
+
+def chunk_bytes(raw: bytes, rel: str, chunk_lines: int, overlap: int,
+                budget: list[int] | None = None) -> tuple[list[str], list[str]]:
+    """Split ``raw`` into line windows. ``budget`` is ``[windows_left]`` for this build."""
+    if budget is None:
+        budget = [MAX_CHUNKS]
     if b"\0" in raw[:4096]:
         return [], []
+    step = max(1, chunk_lines - overlap)
+    # Lower bound: `splitlines` yields at least one line per `\n`. Step 1
+    # visits every line, so this cannot under-count the windows we would walk.
+    if step == 1 and raw.count(b"\n") > budget[0]:
+        raise _chunk_cap(rel)
     lines = raw.decode("utf-8", errors="replace").splitlines()
     ids, texts = [], []
-    step = max(1, chunk_lines - overlap)
+    seen = 0
     for start in range(0, max(1, len(lines)), step):
+        seen += 1
+        if seen > budget[0]:
+            raise _chunk_cap(rel)
         body = "\n".join(lines[start:start + chunk_lines])
         if body.strip():
             ids.append(f"{rel}:{start + 1}-{min(start + chunk_lines, len(lines))}")
             texts.append(body)
         if start + chunk_lines >= len(lines):
             break
+    budget[0] -= seen
     return ids, texts
 
 
-def chunk_file(path: Path, root: Path, chunk_lines: int, overlap: int) -> tuple[list[str], list[str]]:
+def chunk_file(path: Path, root: Path, chunk_lines: int, overlap: int,
+               budget: list[int] | None = None) -> tuple[list[str], list[str]]:
     raw = read_regular_under_root(path, root)
     if raw is None:
         return [], []
     rel = str(path.relative_to(root) if root.is_dir() else Path(path.name))
-    return chunk_bytes(raw, rel, chunk_lines, overlap)
+    return chunk_bytes(raw, rel, chunk_lines, overlap, budget)
 
 
 def chunk_path(path: str, glob: str = "*", chunk_lines: int = 40, overlap: int = 10,
                max_files: int = 5000) -> tuple[list[str], list[str]]:
     root = check_path(path)
     ids, texts = [], []
+    budget = [MAX_CHUNKS]
     for f in iter_files(root, glob, max_files):
-        more_ids, more_texts = chunk_file(f, root, chunk_lines, overlap)
+        more_ids, more_texts = chunk_file(f, root, chunk_lines, overlap, budget)
         ids.extend(more_ids)
         texts.extend(more_texts)
     return ids, texts
@@ -284,6 +304,7 @@ class PathIndex:
     def sync(self, root: Path, glob: str, chunk_lines: int, overlap: int, max_files: int = 5000) -> dict:
         seen = set()
         reindexed = 0
+        budget = [max(0, MAX_CHUNKS - self.live.corpus_size)]
         for f in iter_files(root, glob, max_files):
             rel = str(f.relative_to(root) if root.is_dir() else Path(f.name))
             snap = snapshot_file(f, root)
@@ -297,10 +318,12 @@ class PathIndex:
                 continue
             reindexed += 1
             if prev:
-                for cid in prev["chunk_ids"]:
+                old_ids = prev["chunk_ids"]
+                for cid in old_ids:
                     self.live.delete(cid)
                     self.sets.pop(cid, None)
-            ids, texts = chunk_bytes(raw, rel, chunk_lines, overlap)
+                budget[0] += len(old_ids)
+            ids, texts = chunk_bytes(raw, rel, chunk_lines, overlap, budget)
             for cid, text in zip(ids, texts):
                 self.live.add(cid, text, metadata={"path": rel})
                 self._remember(cid, text)
